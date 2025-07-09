@@ -1,2 +1,2 @@
-# modularity
+# Modularity
 Tactics-driven vericoding

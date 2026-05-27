@@ -54,21 +54,27 @@ namespace InsertionSort
 
 /-- Types in our DSL -/
 inductive Tpe where
+  | unit : Tpe
   | nat : Tpe
   | list : Tpe
+  | pair : Tpe → Tpe → Tpe
   | arrow : Tpe → Tpe → Tpe
   deriving Repr, BEq, DecidableEq
 
 /-- Denotation of types to Lean types -/
 def Tpe.denote : Tpe → Type
+  | .unit => Unit
   | .nat => Nat
   | .list => List Nat
+  | .pair t u => t.denote × u.denote
   | .arrow t u => t.denote → u.denote
 
 /-- Default value for each type - needed for partial functions -/
 instance instInhabitedDenote : (t : Tpe) → Inhabited t.denote
+  | .unit => inferInstanceAs (Inhabited Unit)
   | .nat => inferInstanceAs (Inhabited Nat)
   | .list => inferInstanceAs (Inhabited (List Nat))
+  | .pair t u => ⟨(instInhabitedDenote t).default, (instInhabitedDenote u).default⟩
   | .arrow _t u => ⟨fun _ => (instInhabitedDenote u).default⟩
 
 /-! ## Typed Trms (PHOAS-style) -/
@@ -80,31 +86,38 @@ instance instInhabitedDenote : (t : Tpe) → Inhabited t.denote
     - Pretty printing: instantiate `rep = fun _ => String` for variable names
     - No context lookup needed - Lean handles substitution automatically -/
 inductive Trm' (rep : Tpe → Type) : Tpe → Type where
+  | unit : Trm' rep .unit
   | nil : Trm' rep .list
   | num : Nat → Trm' rep .nat
   | cons : Trm' rep .nat → Trm' rep .list → Trm' rep .list
   | var : {t : Tpe} → rep t → Trm' rep t
   | insert : Trm' rep .nat → Trm' rep .list → Trm' rep .list
+  | mkPair : {t u : Tpe} → Trm' rep t → Trm' rep u → Trm' rep (.pair t u)
+  | fst : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep t
+  | snd : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep u
   | lam : {t u : Tpe} → (rep t → Trm' rep u) → Trm' rep (.arrow t u)
   | app : {t u : Tpe} → Trm' rep (.arrow t u) → Trm' rep t → Trm' rep u
-  | listRec : Trm' rep .list → Trm' rep (.arrow .nat (.arrow .list .list)) → Trm' rep (.arrow .list .list)
+  | listRec : Trm' rep (.arrow .unit .list) → Trm' rep (.arrow (.pair .nat .list) .list) → Trm' rep (.arrow .list .list)
 
 /-- Closed terms are polymorphic over all variable representations -/
 def Trm (t : Tpe) := {rep : Tpe → Type} → Trm' rep t
 
 /-- Smart constructor for closed listRec terms -/
-def Trm.listRec (base : Trm .list) (step : Trm (.arrow .nat (.arrow .list .list))) : Trm (.arrow .list .list) :=
+def Trm.listRec (base : Trm (.arrow .unit .list)) (step : Trm (.arrow (.pair .nat .list) .list)) : Trm (.arrow .list .list) :=
   fun {_rep} => Trm'.listRec base step
 
 /-- Pretty-print a type -/
 def Tpe.pretty : Tpe → String
+  | .unit => "Unit"
   | .nat => "Nat"
   | .list => "List"
+  | .pair t u => s!"({t.pretty} × {u.pretty})"
   | .arrow t u => s!"({t.pretty} → {u.pretty})"
 
 /-- Pretty-print a term with string variables.
     Uses a counter to generate fresh variable names. -/
 def Trm'.prettyAux : {t : Tpe} → Trm' (fun _ => String) t → Nat → String × Nat
+  | _, .unit, n => ("()", n)
   | _, .nil, n => ("[]", n)
   | _, .num k, n => (toString k, n)
   | _, .cons hd tl, n =>
@@ -116,6 +129,16 @@ def Trm'.prettyAux : {t : Tpe} → Trm' (fun _ => String) t → Nat → String �
       let (s1, n1) := e1.prettyAux n
       let (s2, n2) := e2.prettyAux n1
       (s!"insert({s1}, {s2})", n2)
+  | _, .mkPair e1 e2, n =>
+      let (s1, n1) := e1.prettyAux n
+      let (s2, n2) := e2.prettyAux n1
+      (s!"({s1}, {s2})", n2)
+  | _, .fst e, n =>
+      let (s, n1) := e.prettyAux n
+      (s!"{s}.1", n1)
+  | _, .snd e, n =>
+      let (s, n1) := e.prettyAux n
+      (s!"{s}.2", n1)
   | _, .lam (t := ty) f, n =>
       let name := s!"x{n}"
       let (body, n') := (f name).prettyAux (n + 1)
@@ -148,19 +171,23 @@ def insertVal (a : Nat) : List Nat → List Nat
     Termination: structural recursion on terms, with a nested recursion on
     the input list for `listRec` (using precomputed base/step values). -/
 def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
+  | _, .unit => ()
   | _, .nil => []
   | _, .num n => n
   | _, .cons hd tl => hd.eval :: tl.eval
   | _, .var x => x  -- x is already the value!
   | _, .insert e1 e2 => insertVal e1.eval e2.eval
+  | _, .mkPair e1 e2 => (e1.eval, e2.eval)
+  | _, .fst e => e.eval.1
+  | _, .snd e => e.eval.2
   | _, .lam f => fun v => (f v).eval  -- Lean handles binding
   | _, .app f arg => f.eval arg.eval
   | _, .listRec base step =>
-      let baseVal := base.eval
+      let baseVal := base.eval ()
       let stepVal := step.eval
       let rec go : List Nat → List Nat
         | [] => baseVal
-        | a :: tail => stepVal a (go tail)
+        | a :: tail => stepVal (a, go tail)
       go
 
 /-- Evaluate a closed term -/
@@ -172,46 +199,48 @@ def Trm.eval {t : Tpe} (e : Trm t) : t.denote :=
 /-- General implementation structure with embedded correctness proof.
 
     Parameters:
-    - `InBase` : the input type
-    - `OutBase` : the expected output type
-    - `Pre` : precondition on input
-    - `Post` : postcondition relating input to output (also receives proof of Pre)
+    - `ParBase` : the parameter type (for parameterized correctness)
+    - `inTpe` : the DSL input type
+    - `outTpe` : the DSL output type
+    - `Pre` : precondition on parameter and input
+    - `Post` : postcondition relating parameter, input, and output (also receives proof of Pre)
 
-    Fields:
-    - `t` : the DSL type of the term
-    - `apply` : how to obtain output from `t.denote` and input
-    - `code` : the term of type `Trm t`
-    - `correct` : proof that `Pre inp → Post inp hpre (apply code.eval inp)` -/
-structure Impl (InBase OutBase : Type)
-    (Pre : InBase → Prop) (Post : (inp : InBase) → Pre inp → OutBase → Prop) where
-  /-- The DSL type of the implementation -/
-  t : Tpe
-  /-- How to apply the code's denotation to the input to get the output -/
-  apply : t.denote → InBase → OutBase
+    The code type is `.arrow inTpe outTpe`, so `code.eval : inTpe.denote → outTpe.denote`. -/
+structure Impl (ParBase : Type) (inTpe outTpe : Tpe)
+    (Pre : ParBase → inTpe.denote → Prop)
+    (Post : (par : ParBase) → (inp : inTpe.denote) → Pre par inp → outTpe.denote → Prop) where
   /-- The term implementing the function -/
-  code : Trm t
+  code : Trm (.arrow inTpe outTpe)
   /-- Correctness: precondition implies postcondition after evaluation -/
-  correct : ∀ (inp : InBase) (hpre : Pre inp), Post inp hpre (apply code.eval inp)
+  correct : ∀ (par : ParBase) (inp : inTpe.denote) (hpre : Pre par inp),
+    Post par inp hpre (code.eval inp)
 
-/-- List implementation: transforms a list to a list.
+/-- List implementation: transforms a list to a list (no parameter).
+    - inTpe: `.list`, outTpe: `.list`
     - Code type: `.arrow .list .list` (function from list to list)
-    - Apply: `f inp` (apply the function to the input)
     - Correctness: `Pre inp → Post inp hpre (code.eval inp)` -/
 abbrev ListImpl (Pre : List Nat → Prop) (Post : (inp : List Nat) → Pre inp → List Nat → Prop) :=
-  Impl (List Nat) (List Nat) Pre Post
+  Impl Unit .list .list (fun _ => Pre) (fun _ => Post)
 
-/-- Base case implementation with fixed type `.list`.
-    Produces a list with no input, proving `Inv [] out`. -/
-structure BaseImpl (Inv : List Nat → List Nat → Prop) where
-  code : Trm .list
-  correct : Inv [] code.eval
+/-- Base case implementation: produces a list from unit input.
+    - inTpe: `.unit`, outTpe: `.list`
+    - Code type: `.arrow .unit .list`
+    - Post: `Inv [] out` -/
+abbrev BaseImpl (Inv : List Nat → List Nat → Prop) :=
+  Impl Unit .unit .list
+    (fun _ _ => True)
+    (fun _ _ _ out => Inv [] out)
 
-/-- Step case implementation with fixed type `.arrow .nat (.arrow .list .list)`.
-    Given `(a, sorted_tail)` with `Inv tail sorted_tail`, produces output with `Inv (a :: tail) out`. -/
-structure StepImpl (Inv : List Nat → List Nat → Prop) where
-  code : Trm (.arrow .nat (.arrow .list .list))
-  correct : ∀ (tail : List Nat) (a : Nat) (sorted_tail : List Nat),
-    Inv tail sorted_tail → Inv (a :: tail) (code.eval a sorted_tail)
+/-- Step case implementation: parameterized by `tail : List Nat`.
+    - inTpe: `.pair .nat .list` (a, sorted_tail)
+    - outTpe: `.list`
+    - Code type: `.arrow (.pair .nat .list) .list`
+    - Pre: `Inv tail sorted_tail`
+    - Post: `Inv (a :: tail) out` -/
+abbrev StepImpl (Inv : List Nat → List Nat → Prop) :=
+  Impl (List Nat) (.pair .nat .list) .list
+    (fun tail ⟨_, sorted_tail⟩ => Inv tail sorted_tail)
+    (fun tail ⟨a, _⟩ _ out => Inv (a :: tail) out)
 
 /-! ## Ordered Predicate -/
 
@@ -283,22 +312,18 @@ def listRecImpl
     (base : BaseImpl Inv)
     (step : StepImpl Inv)
     : ListImpl ListPre (ListPost Inv) :=
-  { t := .arrow .list .list
-    apply := fun f inp => f inp
-    code := Trm.listRec base.code step.code
-    correct := fun inp _hpre => by
+  { code := Trm.listRec base.code step.code
+    correct := fun _par inp _hpre => by
       simp only [ListPost, Trm.eval]
       -- Prove by induction on inp
       induction inp with
       | nil =>
-        -- Base case: Inv [] (go []) = Inv [] base.code.eval
-        exact base.correct
+        -- Base case: Inv [] (go []) = Inv [] (base.code.eval ())
+        exact base.correct () () trivial
       | cons a tail ih =>
         -- Step case: Inv (a :: tail) (go (a :: tail))
-        --          = Inv (a :: tail) (step.code.eval a (go tail))
         -- ih : ListPre tail → Inv tail (go tail)
-        -- Since ListPre tail = True, apply ih to trivial
-        exact step.correct tail a _ (ih trivial)
+        exact step.correct tail (a, _) (ih trivial)
   }
 
 /-! ## Insertion Sort Impl -/
@@ -306,21 +331,19 @@ def listRecImpl
 /-- Base implementation: nil produces [].
     Proves: Sorted [] [] -/
 def nilImpl : BaseImpl Sorted :=
-  { code := fun {_rep} => Trm'.nil
-    correct := by
-      -- code.eval = Trm'.nil.eval = []
+  { code := fun {_rep} => Trm'.lam fun _ => Trm'.nil
+    correct := fun _ () _ => by
       simp only [Trm.eval, Trm'.eval, Sorted, Ordered]
       exact ⟨trivial, List.Perm.refl []⟩
   }
 
 /-- Step implementation: insert preserves Sorted.
-    The step function is: λ a => λ sorted => insert a sorted
+    The step function is: λ (a, sorted) => insert a sorted
     Proves: Sorted tail sorted_tail → Sorted (a :: tail) (insertVal a sorted_tail) -/
 def insertImpl : StepImpl Sorted :=
-  { code := fun {_rep} => Trm'.lam fun a => Trm'.lam fun sorted =>
-      Trm'.insert (Trm'.var a) (Trm'.var sorted)
-    correct := fun tail a sorted_tail ⟨h_ord, h_perm⟩ => by
-      -- code.eval a sorted_tail = insertVal a sorted_tail
+  { code := fun {_rep} => Trm'.lam fun p =>
+      Trm'.insert (Trm'.fst (Trm'.var p)) (Trm'.snd (Trm'.var p))
+    correct := fun tail ⟨a, sorted_tail⟩ ⟨h_ord, h_perm⟩ => by
       simp only [Trm.eval, Trm'.eval, Sorted]
       constructor
       · exact insertVal_sorted a sorted_tail h_ord
@@ -350,8 +373,7 @@ def synthesizedSort : ListImpl ListPre (ListPost Sorted) := by vericode
 example : insertionSortVal [3, 1, 4] = [1, 3, 4] := rfl
 
 -- Type information
-#check insertionSort.t        -- Tpe
-#check insertionSort.apply    -- insertionSort.t.denote → List Nat → List Nat
+#check insertionSort.code     -- Trm (.arrow .list .list)
 #check insertionSort.correct  -- correctness proof
 
 /-! ## Summary
@@ -362,14 +384,22 @@ Following Chlipala's Parametric Higher-Order Abstract Syntax (PHOAS) approach,
 we define terms parameterized by a variable representation:
 
 ```
+inductive Tpe where
+  | unit | nat | list | pair : Tpe → Tpe → Tpe | arrow : Tpe → Tpe → Tpe
+
 inductive Trm' (rep : Tpe → Type) : Tpe → Type where
+  | unit : Trm' rep .unit
   | nil : Trm' rep .list
   | num : Nat → Trm' rep .nat
   | var : {t : Tpe} → rep t → Trm' rep t
-  | lam : {t u : Tpe} → (rep t → Trm' rep u) → Trm' rep (.arrow t u)
+  | mkPair : Trm' rep t → Trm' rep u → Trm' rep (.pair t u)
+  | fst : Trm' rep (.pair t u) → Trm' rep t
+  | snd : Trm' rep (.pair t u) → Trm' rep u
+  | lam : (rep t → Trm' rep u) → Trm' rep (.arrow t u)
   | app : Trm' rep (.arrow t u) → Trm' rep t → Trm' rep u
   | insert : Trm' rep .nat → Trm' rep .list → Trm' rep .list
-  | listRec : Trm' rep .list → Trm' rep (.arrow .nat (.arrow .list .list)) → Trm' rep (.arrow .list .list)
+  | listRec : Trm' rep (.arrow .unit .list) → Trm' rep (.arrow (.pair .nat .list) .list)
+            → Trm' rep (.arrow .list .list)
 
 def Trm (t : Tpe) := {rep : Tpe → Type} → Trm' rep t  -- Closed terms
 ```
@@ -391,33 +421,34 @@ partial def Trm'.eval : Trm' Tpe.denote t → t.denote
 
 ### Generalized Implementation Structure
 
-All implementations share a common structure with Pre/Post conditions:
+Implementations use DSL types directly:
 
 ```
-structure Impl (InBase OutBase : Type)
-    (Pre : InBase → Prop) (Post : (inp : InBase) → Pre inp → OutBase → Prop) where
-  t : Tpe                                    -- DSL type
-  apply : t.denote → InBase → OutBase        -- How to get output from code and input
-  code : Trm t                               -- The term
-  correct : ∀ inp hpre, Post inp hpre (apply code.eval inp)
+structure Impl (ParBase : Type) (inTpe outTpe : Tpe)
+    (Pre : ParBase → inTpe.denote → Prop)
+    (Post : (par : ParBase) → (inp : inTpe.denote) → Pre par inp → outTpe.denote → Prop) where
+  code : Trm (.arrow inTpe outTpe)           -- Code is always a function
+  correct : ∀ par inp hpre, Post par inp hpre (code.eval inp)
 ```
+
+The `ParBase` parameter allows correctness to be parameterized (e.g., by a tail list).
 
 Specializations:
 
 ```
-abbrev ListImpl Pre Post := Impl (List Nat) (List Nat) Pre Post
--- apply = fun f inp => f inp (code is a function List → List)
+abbrev ListImpl Pre Post := Impl Unit .list .list (fun _ => Pre) (fun _ => Post)
+-- inTpe = .list, outTpe = .list, code : Trm (.arrow .list .list)
 
-abbrev BaseImpl Inv := Impl Unit (List Nat) (fun _ => True) (fun _ _ out => Inv [] out)
--- apply = fun out _ => out (code produces a list directly)
+abbrev BaseImpl Inv := Impl Unit .unit .list (fun _ _ => True) (fun _ _ _ out => Inv [] out)
+-- inTpe = .unit, outTpe = .list, code : Trm (.arrow .unit .list)
 
-abbrev StepImpl Inv := (tail : List Nat) → Impl (Nat × List Nat) (List Nat)
-    (fun ⟨_, sorted_tail⟩ => Inv tail sorted_tail)
-    (fun ⟨a, _⟩ _ out => Inv (a :: tail) out)
--- apply = fun f ⟨a, sorted_tail⟩ => f a sorted_tail (uncurry and apply)
+abbrev StepImpl Inv := Impl (List Nat) (.pair .nat .list) .list
+    (fun tail ⟨_, sorted_tail⟩ => Inv tail sorted_tail)
+    (fun tail ⟨a, _⟩ _ out => Inv (a :: tail) out)
+-- ParBase = List Nat, inTpe = .pair .nat .list, outTpe = .list
 ```
 
-The `correct` field proves: `Pre inp → Post inp hpre (apply code.eval inp)`.
+The `correct` field proves: `Pre par inp → Post par inp hpre (code.eval inp)`.
 
 ### List Induction Combinator
 

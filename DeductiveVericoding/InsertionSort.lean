@@ -54,6 +54,7 @@ namespace InsertionSort
 /-- Types in our DSL -/
 inductive Tpe where
   | unit : Tpe
+  | bool : Tpe
   | nat : Tpe
   | list : Tpe
   | pair : Tpe → Tpe → Tpe
@@ -63,6 +64,7 @@ inductive Tpe where
 /-- Denotation of types to Lean types -/
 def Tpe.denote : Tpe → Type
   | .unit => Unit
+  | .bool => Bool
   | .nat => Nat
   | .list => List Nat
   | .pair t u => t.denote × u.denote
@@ -71,6 +73,7 @@ def Tpe.denote : Tpe → Type
 /-- Default value for each type -/
 instance instInhabitedDenote : (t : Tpe) → Inhabited t.denote
   | .unit => inferInstanceAs (Inhabited Unit)
+  | .bool => inferInstanceAs (Inhabited Bool)
   | .nat => inferInstanceAs (Inhabited Nat)
   | .list => inferInstanceAs (Inhabited (List Nat))
   | .pair t u => ⟨(instInhabitedDenote t).default, (instInhabitedDenote u).default⟩
@@ -97,6 +100,14 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
   | lam : {t u : Tpe} → (rep t → Trm' rep u) → Trm' rep (.arrow t u)
   | app : {t u : Tpe} → Trm' rep (.arrow t u) → Trm' rep t → Trm' rep u
   | listRec : Trm' rep (.arrow .unit .list) → Trm' rep (.arrow (.pair .nat .list) .list) → Trm' rep (.arrow .list .list)
+  -- Boolean operations
+  | true : Trm' rep .bool
+  | false : Trm' rep .bool
+  | le : Trm' rep .nat → Trm' rep .nat → Trm' rep .bool
+  | ite : {t : Tpe} → Trm' rep .bool → Trm' rep t → Trm' rep t → Trm' rep t
+  -- List operations
+  | head : Trm' rep .list → Trm' rep .nat   -- returns 0 for empty list
+  | tail : Trm' rep .list → Trm' rep .list  -- returns [] for empty list
 
 /-- Closed terms are polymorphic over all variable representations -/
 def Trm (t : Tpe) := {rep : Tpe → Type} → Trm' rep t
@@ -108,6 +119,7 @@ def Trm.listRec (base : Trm (.arrow .unit .list)) (step : Trm (.arrow (.pair .na
 /-- Pretty-print a type -/
 def Tpe.pretty : Tpe → String
   | .unit => "Unit"
+  | .bool => "Bool"
   | .nat => "Nat"
   | .list => "List"
   | .pair t u => s!"({t.pretty} × {u.pretty})"
@@ -150,6 +162,23 @@ def Trm'.prettyAux : {t : Tpe} → Trm' (fun _ => String) t → Nat → String �
       let (bs, n1) := base.prettyAux n
       let (ss, n2) := step.prettyAux n1
       (s!"listRec({bs}, {ss})", n2)
+  | _, .true, n => ("true", n)
+  | _, .false, n => ("false", n)
+  | _, .le e1 e2, n =>
+      let (s1, n1) := e1.prettyAux n
+      let (s2, n2) := e2.prettyAux n1
+      (s!"{s1} ≤ {s2}", n2)
+  | _, .ite c t e, n =>
+      let (sc, n1) := c.prettyAux n
+      let (st, n2) := t.prettyAux n1
+      let (se, n3) := e.prettyAux n2
+      (s!"if {sc} then {st} else {se}", n3)
+  | _, .head e, n =>
+      let (s, n1) := e.prettyAux n
+      (s!"head({s})", n1)
+  | _, .tail e, n =>
+      let (s, n1) := e.prettyAux n
+      (s!"tail({s})", n1)
 
 /-- Pretty-print a closed term -/
 def Trm.pretty {t : Tpe} (e : Trm t) : String :=
@@ -186,8 +215,14 @@ def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
       let stepVal := step.eval
       let rec go : List Nat → List Nat
         | [] => baseVal
-        | a :: tail => stepVal (a, go tail)
+        | a :: tl => stepVal (a, go tl)
       go
+  | _, .true => Bool.true
+  | _, .false => Bool.false
+  | _, .le e1 e2 => Nat.ble e1.eval e2.eval
+  | _, .ite c t e => bif c.eval then t.eval else e.eval
+  | _, .head e => match e.eval with | [] => (0 : Nat) | h :: _ => h
+  | _, .tail e => match e.eval with | [] => [] | _ :: tl => tl
 
 /-- Evaluate a closed term -/
 def Trm.eval {t : Tpe} (e : Trm t) : t.denote :=
@@ -248,6 +283,17 @@ def Ordered : List Nat → Prop
   | [_] => True
   | x :: y :: xs => x ≤ y ∧ Ordered (y :: xs)
 
+/-- Insert implementation: inserts an element into a sorted list.
+    - inTpe: `.pair .nat .list` (element, sorted_list)
+    - outTpe: `.list`
+    - Code type: `.arrow (.pair .nat .list) .list`
+    - Pre: input list is sorted
+    - Post: output is sorted and a permutation of (a :: l) -/
+abbrev InsertImpl :=
+  Impl Unit (.pair .nat .list) .list
+    (fun _ ⟨_, l⟩ => Ordered l)
+    (fun _ ⟨a, l⟩ _ out => Ordered out ∧ List.Perm (a :: l) out)
+
 /-! ## Properties of insertVal -/
 
 theorem insertVal_sorted (a : Nat) (l : List Nat) (hs : Ordered l) :
@@ -274,20 +320,6 @@ theorem insertVal_perm (a : Nat) (l : List Nat) :
 /-- The sorting invariant: output is sorted and a permutation of input -/
 def Sorted (inp out : List Nat) : Prop :=
   Ordered out ∧ List.Perm inp out
-
-/-! ## Semantic Sorting Function -/
-
-def insertionSortVal : List Nat → List Nat
-  | [] => []
-  | a :: l => insertVal a (insertionSortVal l)
-
-/-- insertionSortVal satisfies Sorted -/
-theorem insertionSortVal_correct : ∀ l, Sorted l (insertionSortVal l) := by
-  intro l
-  induction l with
-  | nil => exact ⟨trivial, List.Perm.refl _⟩
-  | cons a t ih =>
-    exact ⟨insertVal_sorted a _ ih.1, (List.Perm.cons a ih.2).trans (insertVal_perm a _)⟩
 
 /-! ## The List Induction Combinator -/
 
@@ -334,6 +366,88 @@ def insertImpl : StepImpl Sorted :=
       ⟨insertVal_sorted a sorted_tail h_ord,
        (h_perm.cons a).trans (insertVal_perm a sorted_tail)⟩ }
 
+/-! ## Synthesized Insert using listRec -/
+
+/-- All elements in a sorted list are ≥ its head -/
+theorem Ordered.all_ge_head (h : Nat) (t : List Nat) (hs : Ordered (h :: t)) :
+    ∀ x ∈ t, h ≤ x := by
+  intro x hx
+  induction t generalizing h with
+  | nil => nomatch hx
+  | cons h' t' ih =>
+    cases List.mem_cons.mp hx with
+    | inl heq => rw [heq]; exact hs.1
+    | inr hmem =>
+      have hh' : h ≤ h' := hs.1
+      have ht'_ord : Ordered (h' :: t') := hs.2
+      exact Nat.le_trans hh' (ih h' ht'_ord hmem)
+
+/-- For sorted h :: t and a ≤ h, insertVal a t = a :: t -/
+theorem insertVal_le_cons (a h : Nat) (t : List Nat) (hs : Ordered (h :: t)) (hle : a ≤ h) :
+    insertVal a t = a :: t := by
+  cases t with
+  | nil => rfl
+  | cons h' t' =>
+    simp only [insertVal]
+    have hh' : h ≤ h' := hs.1
+    have hah' : a ≤ h' := Nat.le_trans hle hh'
+    simp [hah']
+
+/-- Synthesized insert implementation using listRec.
+
+    Code: λ (a, l) => listRec (λ _ => [a]) (λ (h, rec) => if a ≤ h then a :: h :: tail rec else h :: rec) l
+
+    The key insight: for sorted input, when a ≤ h, we have insertVal a t = a :: t,
+    so tail (insertVal a t) = t, allowing us to recover the original tail. -/
+def synthesizedInsert : InsertImpl :=
+  { code := fun {rep} => Trm'.lam fun p =>
+      let a := Trm'.fst (.var p)
+      let l := Trm'.snd (.var p)
+      Trm'.app
+        (Trm'.listRec
+          -- base: λ _ => [a]
+          (Trm'.lam fun _ => Trm'.cons a Trm'.nil)
+          -- step: λ (h, rec) => if a ≤ h then a :: h :: tail rec else h :: rec
+          (Trm'.lam fun hr =>
+            let h := Trm'.fst (.var hr)
+            let result := Trm'.snd (.var hr)
+            Trm'.ite (Trm'.le a h)
+              (Trm'.cons a (Trm'.cons h (Trm'.tail result)))
+              (Trm'.cons h result)))
+        l
+    correct := fun _ ⟨a, l⟩ hl => by
+      -- The synthesized code evaluates to insertVal a l
+      -- We prove equivalence and use existing theorems
+      have heq : ∀ l, Ordered l → Trm'.eval.go [a]
+          (fun v => bif Nat.ble a v.1 then a :: v.1 :: (match v.2 with | [] => [] | _ :: tl => tl)
+                    else v.1 :: v.2) l = insertVal a l := by
+        intro l hl'
+        induction l with
+        | nil => rfl
+        | cons h t ih =>
+          simp only [insertVal, Trm'.eval.go]
+          have ht_ord : Ordered t := by cases t <;> simp_all [Ordered]
+          cases Nat.decLe a h with
+          | isTrue hle =>
+            -- a ≤ h: Nat.ble a h = true, bif evaluates to first branch
+            have h_insert_eq : insertVal a t = a :: t := insertVal_le_cons a h t hl' hle
+            have hble : Nat.ble a h = true := Nat.ble_eq.mpr hle
+            simp only [ih ht_ord, h_insert_eq, hble, cond_true, hle, ite_true]
+          | isFalse hle =>
+            -- a > h: Nat.ble a h = false, bif evaluates to second branch
+            have hble : Nat.ble a h = false :=
+              Bool.eq_false_iff.mpr (fun h => hle (Nat.ble_eq.mp h))
+            simp only [ih ht_ord, hble, cond_false, hle, ite_false]
+      simp only [Trm.eval, Trm'.eval]
+      have hl' : Ordered l := hl
+      convert And.intro (insertVal_sorted a l hl') (insertVal_perm a l) using 2 <;>
+        exact heq l hl'
+  }
+
+-- Pretty print the synthesized insert code
+#eval Trm.pretty synthesizedInsert.code
+-- "(λ x0 : (Nat × List) => listRec((λ x1 : Unit => x0.1 :: []), (λ x2 : (Nat × List) => if x0.1 ≤ x2.1 then x0.1 :: x2.1 :: tail(x2.2) else x2.1 :: x2.2))(x0.2))"
+
 /-! ## Tactic -/
 
 /-- Tactic for synthesizing verified list implementations.
@@ -345,13 +459,16 @@ def synthesizedSort : ListImpl ListPre (ListPost Sorted) := by vericode
 
 /-! ## Examples -/
 
-#eval insertionSortVal [3, 1, 4, 1, 5, 9, 2, 6]
+-- Evaluate the synthesized sort
+#eval synthesizedSort.code.eval [3, 1, 4, 1, 5, 9, 2, 6]
+-- [1, 1, 2, 3, 4, 5, 6, 9]
 
 -- Pretty print the synthesized code
 #eval Trm.pretty synthesizedSort.code
+-- "listRec((λ x0 : Unit => []), (λ x1 : (Nat × List) => insert(x1.1, x1.2)))"
 
--- Direct evaluation using semantic function
-example : insertionSortVal [3, 1, 4] = [1, 3, 4] := rfl
+-- Direct evaluation
+example : synthesizedSort.code.eval [3, 1, 4] = [1, 3, 4] := rfl
 
 -- Type information
 #check synthesizedSort.code     -- Trm (.arrow .list .list)

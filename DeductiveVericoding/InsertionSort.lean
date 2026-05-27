@@ -8,7 +8,7 @@ list induction principle, following the Codable pattern.
 
 ## Structure
 
-1. **Type Universe**: `Tpe` - types in our DSL (nat, list, arrow)
+1. **Type Universe**: `Tpe` - types in our DSL (unit, nat, list, pair, arrow)
 2. **PHOAS Syntax**: `Trm' rep : Tpe → Type` - Parametric Higher-Order Abstract Syntax
 3. **Closed Terms**: `Trm t = {rep : Tpe → Type} → Trm' rep t`
 4. **Context-free Semantics**: `Trm'.eval` - no variable lookup needed
@@ -34,11 +34,10 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
 ## The List Induction Principle
 
 Given `Inv : List Nat → List Nat → Prop` relating input to output:
-- Base implementation: `BaseImpl BasePre (BasePost Inv)`
-- Step implementation: `StepImpl (StepPre Inv) (StepPost Inv)`
+- Base implementation: `BaseImpl Inv` proving `Inv [] (base.code.eval ())`
+- Step implementation: `StepImpl Inv` proving the step preserves invariant
 
-We construct:
-- `ListImpl ListPre (ListPost Inv)`
+We construct: `ListImpl ListPre (ListPost Inv)`
 
 For sorting, `Sorted inp out = Ordered out ∧ List.Perm inp out`.
 
@@ -69,7 +68,7 @@ def Tpe.denote : Tpe → Type
   | .pair t u => t.denote × u.denote
   | .arrow t u => t.denote → u.denote
 
-/-- Default value for each type - needed for partial functions -/
+/-- Default value for each type -/
 instance instInhabitedDenote : (t : Tpe) → Inhabited t.denote
   | .unit => inferInstanceAs (Inhabited Unit)
   | .nat => inferInstanceAs (Inhabited Nat)
@@ -301,10 +300,10 @@ def ListPost (Inv : List Nat → List Nat → Prop) (l : List Nat) (_hpre : List
 /-- The list induction combinator.
 
     Given:
-    - `base` : BaseImpl Inv proving `Inv [] (base.code.eval)`
-    - `step` : StepImpl Inv proving the step preserves the invariant
+    - `base : BaseImpl Inv` proving `Inv [] (base.code.eval ())`
+    - `step : StepImpl Inv` proving the step preserves the invariant
 
-    We construct a ListImpl with the combined correctness proof.
+    We construct a `ListImpl` with the combined correctness proof.
 
     This is Theorem A.2.1 from Jin-Xing Lim's thesis. -/
 def listRecImpl
@@ -315,40 +314,25 @@ def listRecImpl
   { code := Trm.listRec base.code step.code
     correct := fun _par inp _hpre => by
       simp only [ListPost, Trm.eval]
-      -- Prove by induction on inp
       induction inp with
-      | nil =>
-        -- Base case: Inv [] (go []) = Inv [] (base.code.eval ())
-        exact base.correct () () trivial
-      | cons a tail ih =>
-        -- Step case: Inv (a :: tail) (go (a :: tail))
-        -- ih : ListPre tail → Inv tail (go tail)
-        exact step.correct tail (a, _) (ih trivial)
+      | nil => exact base.correct () () trivial
+      | cons a tail ih => exact step.correct tail (a, _) (ih trivial)
   }
 
 /-! ## Insertion Sort Impl -/
 
-/-- Base implementation: nil produces [].
-    Proves: Sorted [] [] -/
+/-- Base implementation: `λ _ => []` produces empty list. -/
 def nilImpl : BaseImpl Sorted :=
   { code := fun {_rep} => Trm'.lam fun _ => Trm'.nil
-    correct := fun _ () _ => by
-      simp only [Trm.eval, Trm'.eval, Sorted, Ordered]
-      exact ⟨trivial, List.Perm.refl []⟩
-  }
+    correct := fun _ () _ => ⟨trivial, .refl _⟩ }
 
-/-- Step implementation: insert preserves Sorted.
-    The step function is: λ (a, sorted) => insert a sorted
-    Proves: Sorted tail sorted_tail → Sorted (a :: tail) (insertVal a sorted_tail) -/
+/-- Step implementation: `λ (a, sorted) => insert a sorted` preserves Sorted. -/
 def insertImpl : StepImpl Sorted :=
   { code := fun {_rep} => Trm'.lam fun p =>
-      Trm'.insert (Trm'.fst (Trm'.var p)) (Trm'.snd (Trm'.var p))
-    correct := fun tail ⟨a, sorted_tail⟩ ⟨h_ord, h_perm⟩ => by
-      simp only [Trm.eval, Trm'.eval, Sorted]
-      constructor
-      · exact insertVal_sorted a sorted_tail h_ord
-      · exact (h_perm.cons a).trans (insertVal_perm a sorted_tail)
-  }
+      Trm'.insert (.fst (.var p)) (.snd (.var p))
+    correct := fun _tail ⟨a, sorted_tail⟩ ⟨h_ord, h_perm⟩ =>
+      ⟨insertVal_sorted a sorted_tail h_ord,
+       (h_perm.cons a).trans (insertVal_perm a sorted_tail)⟩ }
 
 /-- Verified insertion sort -/
 def insertionSort : ListImpl ListPre (ListPost Sorted) :=
@@ -366,8 +350,7 @@ def synthesizedSort : ListImpl ListPre (ListPost Sorted) := by vericode
 #eval insertionSortVal [3, 1, 4, 1, 5, 9, 2, 6]
 
 -- Pretty print the synthesized code
--- Note: Can't eval due to sorry in correctness proofs
--- #eval! Trm.pretty insertionSort.code
+#eval Trm.pretty insertionSort.code
 
 -- Direct evaluation using semantic function
 example : insertionSortVal [3, 1, 4] = [1, 3, 4] := rfl
@@ -412,10 +395,10 @@ Key benefits of PHOAS:
 ### Evaluation without Context
 
 ```
-partial def Trm'.eval : Trm' Tpe.denote t → t.denote
+def Trm'.eval : Trm' Tpe.denote t → t.denote
   | .var x => x  -- x is already the value!
   | .lam f => fun v => (f v).eval  -- Lean handles binding
-  | .listRec base step => fun input => ...  -- returns a function
+  | .listRec base step => ...  -- returns a function List → List
   ...
 ```
 
@@ -456,14 +439,14 @@ The `listRecImpl` combinator constructs a `ListImpl` from base and step implemen
 
 ```
 def listRecImpl (Inv : List Nat → List Nat → Prop)
-    (base : BaseImpl (Inv []))
+    (base : BaseImpl Inv)
     (step : StepImpl Inv)
     : ListImpl ListPre (ListPost Inv)
 ```
 
 The combinator:
 1. Combines `base.code` and `step.code` into a `listRec` term
-2. Constructs the correctness proof using `base.correct` and `step.correct`
+2. Proves correctness by induction using `base.correct` and `step.correct`
 
 For sorting, `Sorted inp out = Ordered out ∧ List.Perm inp out`.
 

@@ -145,9 +145,9 @@ def insertVal (a : Nat) : List Nat → List Nat
     Variables hold their values directly - no context lookup needed!
     This is the key PHOAS insight: Lean handles substitution automatically.
 
-    Note: Uses `partial` because termination involves mutual recursion between
-    structural recursion on terms and recursion on the input list. -/
-partial def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
+    Termination: structural recursion on terms, with a nested recursion on
+    the input list for `listRec` (using precomputed base/step values). -/
+def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
   | _, .nil => []
   | _, .num n => n
   | _, .cons hd tl => hd.eval :: tl.eval
@@ -155,12 +155,13 @@ partial def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
   | _, .insert e1 e2 => insertVal e1.eval e2.eval
   | _, .lam f => fun v => (f v).eval  -- Lean handles binding
   | _, .app f arg => f.eval arg.eval
-  | _, .listRec base step => fun input =>
-      match input with
-      | [] => base.eval
-      | a :: tail =>
-          let rec_result := (Trm'.listRec base step).eval tail
-          step.eval a rec_result
+  | _, .listRec base step =>
+      let baseVal := base.eval
+      let stepVal := step.eval
+      let rec go : List Nat → List Nat
+        | [] => baseVal
+        | a :: tail => stepVal a (go tail)
+      go
 
 /-- Evaluate a closed term -/
 def Trm.eval {t : Tpe} (e : Trm t) : t.denote :=
@@ -199,25 +200,18 @@ structure Impl (InBase OutBase : Type)
 abbrev ListImpl (Pre : List Nat → Prop) (Post : (inp : List Nat) → Pre inp → List Nat → Prop) :=
   Impl (List Nat) (List Nat) Pre Post
 
-/-- Base case implementation: produces a list with no input.
-    - Code type: `.list` (a list value)
-    - Apply: `out ()` (ignore unit input, return the list)
-    - Pre: `True` (always satisfied)
-    - Post: `Inv [] out` -/
-abbrev BaseImpl (Inv : List Nat → List Nat → Prop) :=
-  Impl Unit (List Nat) (fun _ => True) (fun _ _ out => Inv [] out)
+/-- Base case implementation with fixed type `.list`.
+    Produces a list with no input, proving `Inv [] out`. -/
+structure BaseImpl (Inv : List Nat → List Nat → Prop) where
+  code : Trm .list
+  correct : Inv [] code.eval
 
-/-- Step case implementation: produces sorted list for `a :: tail`.
-    - Input: `(a, sorted_tail)` where `a` is the head and `sorted_tail` is the sorted tail
-    - Output: `List Nat` (the sorted list for `a :: tail`)
-    - Code type: `.arrow .nat (.arrow .list .list)` (curried)
-    - Apply: `f a sorted_tail` (uncurry and apply)
-    - Pre: `Inv tail sorted_tail` - the invariant holds for the tail
-    - Post: `Inv (a :: tail) out` - invariant holds for the result -/
-abbrev StepImpl (Inv : List Nat → List Nat → Prop) := (tail : List Nat) →
-  Impl (Nat × List Nat) (List Nat)
-    (fun ⟨_, sorted_tail⟩ => Inv tail sorted_tail)
-    (fun ⟨a, _⟩ _ out => Inv (a :: tail) out)
+/-- Step case implementation with fixed type `.arrow .nat (.arrow .list .list)`.
+    Given `(a, sorted_tail)` with `Inv tail sorted_tail`, produces output with `Inv (a :: tail) out`. -/
+structure StepImpl (Inv : List Nat → List Nat → Prop) where
+  code : Trm (.arrow .nat (.arrow .list .list))
+  correct : ∀ (tail : List Nat) (a : Nat) (sorted_tail : List Nat),
+    Inv tail sorted_tail → Inv (a :: tail) (code.eval a sorted_tail)
 
 /-! ## Ordered Predicate -/
 
@@ -288,59 +282,49 @@ def listRecImpl
     (Inv : List Nat → List Nat → Prop)
     (base : BaseImpl Inv)
     (step : StepImpl Inv)
-    (base_t : base.t = .list := by rfl)
-    (step_t : ∀ tail, (step tail).t = .arrow .nat (.arrow .list .list) := by intros; rfl)
     : ListImpl ListPre (ListPost Inv) :=
   { t := .arrow .list .list
     apply := fun f inp => f inp
-    code := Trm.listRec (base_t ▸ base.code) (step_t [] ▸ (step []).code)
-    correct := fun inp hpre => by
-      -- The correctness follows from base.correct and step.correct by induction.
-      -- However, proving this requires unfolding partial eval, so we use sorry.
-      -- The semantic correctness is: Inv inp (listRec base step inp)
-      -- Base: Inv [] (base.eval) from base.correct ()
-      -- Step: Inv tail rec → Inv (a::tail) (step tail (a, rec)) from (step tail).correct
-      sorry
+    code := Trm.listRec base.code step.code
+    correct := fun inp _hpre => by
+      simp only [ListPost, Trm.eval]
+      -- Prove by induction on inp
+      induction inp with
+      | nil =>
+        -- Base case: Inv [] (go []) = Inv [] base.code.eval
+        exact base.correct
+      | cons a tail ih =>
+        -- Step case: Inv (a :: tail) (go (a :: tail))
+        --          = Inv (a :: tail) (step.code.eval a (go tail))
+        -- ih : ListPre tail → Inv tail (go tail)
+        -- Since ListPre tail = True, apply ih to trivial
+        exact step.correct tail a _ (ih trivial)
   }
 
 /-! ## Insertion Sort Impl -/
 
 /-- Base implementation: nil produces [].
-    Proves: Sorted [] (code.eval)
-
-    Note: The correctness proof uses sorry because partial functions
-    don't reduce definitionally. The semantic correctness is established
-    by the structure of the term (nil evaluates to []). -/
+    Proves: Sorted [] [] -/
 def nilImpl : BaseImpl Sorted :=
-  { t := .list
-    apply := fun out _ => out
-    code := fun {_rep} => Trm'.nil
-    correct := fun _ _ => by
-      -- Semantically: code.eval = [], so we need Sorted [] []
-      -- Which is: Ordered [] ∧ Perm [] []
-      simp only [Sorted]
-      sorry  -- partial eval doesn't reduce: need Ordered (eval) ∧ Perm [] (eval)
+  { code := fun {_rep} => Trm'.nil
+    correct := by
+      -- code.eval = Trm'.nil.eval = []
+      simp only [Trm.eval, Trm'.eval, Sorted, Ordered]
+      exact ⟨trivial, List.Perm.refl []⟩
   }
 
 /-- Step implementation: insert preserves Sorted.
     The step function is: λ a => λ sorted => insert a sorted
-    Proves: Sorted tail sorted_tail → Sorted (a :: tail) (code.eval a sorted_tail)
-
-    Note: Uses sorry because partial functions don't reduce.
-    Semantically, code.eval a sorted = insertVal a sorted. -/
-def insertImpl : StepImpl Sorted := fun tail =>
-  { t := .arrow .nat (.arrow .list .list)
-    apply := fun f ⟨a, sorted_tail⟩ => f a sorted_tail  -- uncurry and apply
-    code := fun {_rep} => Trm'.lam fun a => Trm'.lam fun sorted =>
+    Proves: Sorted tail sorted_tail → Sorted (a :: tail) (insertVal a sorted_tail) -/
+def insertImpl : StepImpl Sorted :=
+  { code := fun {_rep} => Trm'.lam fun a => Trm'.lam fun sorted =>
       Trm'.insert (Trm'.var a) (Trm'.var sorted)
-    correct := fun ⟨a, sorted_tail⟩ hpre => by
-      -- Pre: Sorted tail sorted_tail
-      obtain ⟨h_ord, h_perm⟩ := hpre
-      -- Post: Sorted (a :: tail) (code.eval a sorted_tail)
-      simp only [Sorted]
+    correct := fun tail a sorted_tail ⟨h_ord, h_perm⟩ => by
+      -- code.eval a sorted_tail = insertVal a sorted_tail
+      simp only [Trm.eval, Trm'.eval, Sorted]
       constructor
-      · sorry  -- Ordered (code.eval a sorted_tail)
-      · sorry  -- Perm (a :: tail) (code.eval a sorted_tail)
+      · exact insertVal_sorted a sorted_tail h_ord
+      · exact (h_perm.cons a).trans (insertVal_perm a sorted_tail)
   }
 
 /-- Verified insertion sort -/

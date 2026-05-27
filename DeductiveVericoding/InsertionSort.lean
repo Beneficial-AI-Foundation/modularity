@@ -334,14 +334,12 @@ def insertImpl : StepImpl Sorted :=
       ⟨insertVal_sorted a sorted_tail h_ord,
        (h_perm.cons a).trans (insertVal_perm a sorted_tail)⟩ }
 
-/-- Verified insertion sort -/
-def insertionSort : ListImpl ListPre (ListPost Sorted) :=
-  listRecImpl Sorted nilImpl insertImpl
-
 /-! ## Tactic -/
 
+/-- Tactic for synthesizing verified list implementations.
+    Repeatedly tries to apply combinators (listRecImpl) and implementations (nilImpl, insertImpl). -/
 macro "vericode" : tactic =>
-  `(tactic| exact listRecImpl Sorted nilImpl insertImpl)
+  `(tactic| repeat any_goals first | refine listRecImpl _ ?_ ?_ | refine nilImpl | refine insertImpl)
 
 def synthesizedSort : ListImpl ListPre (ListPost Sorted) := by vericode
 
@@ -350,14 +348,14 @@ def synthesizedSort : ListImpl ListPre (ListPost Sorted) := by vericode
 #eval insertionSortVal [3, 1, 4, 1, 5, 9, 2, 6]
 
 -- Pretty print the synthesized code
-#eval Trm.pretty insertionSort.code
+#eval Trm.pretty synthesizedSort.code
 
 -- Direct evaluation using semantic function
 example : insertionSortVal [3, 1, 4] = [1, 3, 4] := rfl
 
 -- Type information
-#check insertionSort.code     -- Trm (.arrow .list .list)
-#check insertionSort.correct  -- correctness proof
+#check synthesizedSort.code     -- Trm (.arrow .list .list)
+#check synthesizedSort.correct  -- correctness proof
 
 /-! ## Summary
 

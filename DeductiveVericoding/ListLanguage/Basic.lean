@@ -181,10 +181,6 @@ instance {t : Tpe} : ToString (Trm t) := ⟨Trm.pretty⟩
 
 /-! ## Semantics -/
 
-def insertVal (a : Nat) : List Nat → List Nat
-  | [] => [a]
-  | h :: t => if a ≤ h then a :: h :: t else h :: insertVal a t
-
 /-- Evaluate a term with `rep = Tpe.denote`.
     Variables hold their values directly - no context lookup needed!
     This is the key PHOAS insight: Lean handles substitution automatically.
@@ -225,20 +221,18 @@ def Trm.eval {t : Tpe} (e : Trm t) : t.denote :=
 /-- General implementation structure with embedded correctness proof.
 
     Parameters:
-    - `ParBase` : the parameter type (for parameterized correctness)
     - `inTpe` : the DSL input type
     - `outTpe` : the DSL output type
     - `Pre` : precondition on parameter and input
     - `Post` : postcondition relating parameter, input, and output (also receives proof of Pre)
 
     The code type is `.arrow inTpe outTpe`, so `code.eval : inTpe.denote → outTpe.denote`. -/
-structure Impl (ParBase : Type) (inTpe outTpe : Tpe)
-    (Pre : ParBase → inTpe.denote → Prop)
-    (Post : (par : ParBase) → (inp : inTpe.denote) → Pre par inp → outTpe.denote → Prop) where
+structure Impl (inTpe outTpe : Tpe)
+    (Pre : inTpe.denote → Prop)
+    (Post : inTpe.denote → outTpe.denote → Prop) where
   /-- The term implementing the function -/
   code : Trm (.arrow inTpe outTpe)
   /-- Correctness: precondition implies postcondition after evaluation -/
-  correct : ∀ (par : ParBase) (inp : inTpe.denote) (hpre : Pre par inp),
-    Post par inp hpre (code.eval inp)
+  correct : ∀ inp, Pre inp →  Post inp (code.eval inp)
 
 end ListLanguage

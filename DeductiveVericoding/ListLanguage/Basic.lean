@@ -91,7 +91,6 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
   | num : Nat → Trm' rep .nat
   | cons : Trm' rep .nat → Trm' rep .list → Trm' rep .list
   | var : {t : Tpe} → rep t → Trm' rep t
-  | insert : Trm' rep .nat → Trm' rep .list → Trm' rep .list
   | mkPair : {t u : Tpe} → Trm' rep t → Trm' rep u → Trm' rep (.pair t u)
   | fst : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep t
   | snd : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep u
@@ -134,10 +133,6 @@ def Trm'.prettyAux : {t : Tpe} → Trm' (fun _ => String) t → Nat → String �
       let (tls, n2) := tl.prettyAux n1
       (s!"{hds} :: {tls}", n2)
   | _, .var x, n => (x, n)
-  | _, .insert e1 e2, n =>
-      let (s1, n1) := e1.prettyAux n
-      let (s2, n2) := e2.prettyAux n1
-      (s!"insert({s1}, {s2})", n2)
   | _, .mkPair e1 e2, n =>
       let (s1, n1) := e1.prettyAux n
       let (s2, n2) := e2.prettyAux n1
@@ -202,7 +197,6 @@ def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
   | _, .num n => n
   | _, .cons hd tl => hd.eval :: tl.eval
   | _, .var x => x  -- x is already the value!
-  | _, .insert e1 e2 => insertVal e1.eval e2.eval
   | _, .mkPair e1 e2 => (e1.eval, e2.eval)
   | _, .fst e => e.eval.1
   | _, .snd e => e.eval.2

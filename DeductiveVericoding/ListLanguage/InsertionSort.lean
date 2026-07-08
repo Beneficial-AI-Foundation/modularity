@@ -112,14 +112,6 @@ def nilImpl : BaseImpl Sorted :=
   { code := fun {_rep} => Trm'.lam fun _ => Trm'.nil
     correct := fun _ () _ => ⟨trivial, .refl _⟩ }
 
-/-- Step implementation: `λ (a, sorted) => insert a sorted` preserves Sorted. -/
-def insertImpl : StepImpl Sorted :=
-  { code := fun {_rep} => Trm'.lam fun p =>
-      Trm'.insert (.fst (.var p)) (.snd (.var p))
-    correct := fun _tail ⟨a, sorted_tail⟩ ⟨h_ord, h_perm⟩ =>
-      ⟨insertVal_sorted a sorted_tail h_ord,
-       (h_perm.cons a).trans (insertVal_perm a sorted_tail)⟩ }
-
 /-! ## Synthesized Insert using listRec -/
 
 /-- All elements in a sorted list are ≥ its head -/
@@ -208,25 +200,6 @@ def synthesizedInsert : InsertImpl :=
     Repeatedly tries to apply combinators (listRecImpl) and implementations (nilImpl, insertImpl). -/
 macro "vericode" : tactic =>
   `(tactic| repeat any_goals first | refine listRecImpl _ ?_ ?_ | refine nilImpl | refine insertImpl)
-
-def synthesizedSort : ListImpl ListPre (ListPost Sorted) := by vericode
-
-/-! ## Examples -/
-
--- Evaluate the synthesized sort
-#eval synthesizedSort.code.eval [3, 1, 4, 1, 5, 9, 2, 6]
--- [1, 1, 2, 3, 4, 5, 6, 9]
-
--- Pretty print the synthesized code
-#eval Trm.pretty synthesizedSort.code
--- "listRec((λ x0 : Unit => []), (λ x1 : (Nat × List) => insert(x1.1, x1.2)))"
-
--- Direct evaluation
-example : synthesizedSort.code.eval [3, 1, 4] = [1, 3, 4] := rfl
-
--- Type information
-#check synthesizedSort.code     -- Trm (.arrow .list .list)
-#check synthesizedSort.correct  -- correctness proof
 
 /-! ## Summary
 

@@ -96,7 +96,7 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
   | snd : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep u
   | lam : {t u : Tpe} → (rep t → Trm' rep u) → Trm' rep (.arrow t u)
   | app : {t u : Tpe} → Trm' rep (.arrow t u) → Trm' rep t → Trm' rep u
-  | listRec : Trm' rep (.arrow .unit .list) → Trm' rep (.arrow (.pair .nat .list) .list) → Trm' rep (.arrow .list .list)
+  | listRec : Trm' rep (.arrow .unit .list) → Trm' rep (.arrow .nat (.arrow .list (.arrow .list .list))) → Trm' rep (.arrow .list .list)
   -- Boolean operations
   | true : Trm' rep .bool
   | false : Trm' rep .bool
@@ -110,7 +110,7 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
 def Trm (t : Tpe) := {rep : Tpe → Type} → Trm' rep t
 
 /-- Smart constructor for closed listRec terms -/
-def Trm.listRec (base : Trm (.arrow .unit .list)) (step : Trm (.arrow (.pair .nat .list) .list)) : Trm (.arrow .list .list) :=
+def Trm.listRec (base : Trm (.arrow .unit .list)) (step : Trm (.arrow .nat (.arrow .list (.arrow .list .list)))) : Trm (.arrow .list .list) :=
   fun {_rep} => Trm'.listRec base step
 
 /-- Pretty-print a type -/
@@ -203,7 +203,7 @@ def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
       let stepVal := step.eval
       let rec go : List Nat → List Nat
         | [] => baseVal
-        | a :: tl => stepVal (a, go tl)
+        | a :: tl => stepVal a tl (go tl)
       go
   | _, .true => Bool.true
   | _, .false => Bool.false

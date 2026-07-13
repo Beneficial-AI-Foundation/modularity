@@ -1,4 +1,4 @@
-import DeductiveVericoding.DoubleCat
+import DeductiveVericoding.CategoryTheory.DoubleCat
 
 /-!
 # DoubleCodable: Verified Program Synthesis via Pseudo-Double Categories

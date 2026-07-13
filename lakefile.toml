@@ -24,3 +24,13 @@ rev = "master"
 
 [[lean_lib]]
 name = "DeductiveVericoding"
+# Explicitly list the modules CI must compile: the default glob only builds
+# the root module's import closure, which silently skips everything else.
+# ToBeScrapped/ is deliberately excluded (Demo and Effects need the disabled
+# Canonical dependency; Core and Reader fail against current Mathlib).
+globs = [
+  "DeductiveVericoding",
+  "DeductiveVericoding.CategoryTheory.+",
+  "DeductiveVericoding.Function.+",
+  "DeductiveVericoding.ListLanguage.+"
+]

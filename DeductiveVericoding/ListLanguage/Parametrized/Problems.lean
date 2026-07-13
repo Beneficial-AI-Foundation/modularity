@@ -8,8 +8,8 @@ namespace Parametrized
 abbrev ConsProblem := ImplP [] (.arrow .nat (.arrow .list .list)) (fun _ f => ∀ n, ∀ l, f n l = n :: l)
 
 def ConsSolution : ConsProblem := by
-  apply IntroPTactic _ .nat (.arrow .list .list) (fun env f => ∀ l, f l = (env.getT 0 .nat) :: l)
-  apply IntroPTactic _ .list .list (fun env out => out = (env.getT 1 .nat) :: (env.getT 0 .list))
+  introP
+  introP
   apply ConsPTactic
   · apply ParPTactic
   apply ParPTactic
@@ -20,7 +20,7 @@ def ConsSolution : ConsProblem := by
 abbrev AppendParameterProblem := ImplP [] (.arrow .nat (.arrow .list .list)) (fun _ f => ∀ n, ∀ l, f n l = l.append [n])
 
 def AppendParameterSolution : AppendParameterProblem := by
-  apply IntroPTactic _ .nat (.arrow .list .list) (fun env f => ∀ l, f l = l.append [(env.getT 0 .nat)])
+  introP
   apply ListRecPTactic _ (fun env inp out => out = inp.append [env.getT 0 Tpe.nat])
   · apply ConsPTactic
     · exact ParPTactic [Tpe.nat] Tpe.nat 0
@@ -64,3 +64,13 @@ def ReverseSolution : ReverseProblem := by
 
 #eval Trm.pretty (toClosed ReverseSolution.code)
 -- "listRec((λ x0 : Unit => []), (λ x1 : Nat => (λ x2 : List => (λ x3 : List => listRec((λ x4 : Unit => x1 :: []), (λ x5 : Nat => (λ x6 : List => (λ x7 : List => x5 :: x7))))(x3)))))"
+
+/-- Regression test for the `introP` macro: it infers `s`, `t` and the residual condition
+    from the goal, including the de Bruijn shift when introducing under an existing parameter.
+    Note that `introP` is invoked with no explicit arguments at all. -/
+example : ImplP [] (.arrow .nat (.arrow .list .list)) (fun _ f => ∀ n, ∀ l, f n l = n :: l) := by
+  introP -- infers s = .nat, t = .arrow .list .list, Cond = fun e out => ∀ l, out l = e.getT 0 .nat :: l
+  introP -- infers s = .list, t = .list, shifting the earlier lookup to `e.getT 1 .nat`
+  apply ConsPTactic
+  · apply ParPTactic
+  apply ParPTactic

@@ -40,6 +40,10 @@ def toList' {rep : Tpe → Type} : {Γ : Ctx} → {t : Tpe} → Trm Γ t → Env
   | _, _, .listRec base step, ρ => ListLanguage.Trm'.listRec
     (.lam fun _ => toList' base ρ)
     (.lam fun a => .lam fun l => .lam fun res => toList' step (a, (l, (res, ρ))))
+  | _, _, .true, _ => .true
+  | _, _, .false, _ => .false
+  | _, _, .le e1 e2, env => .le (toList' e1 env) (toList' e2 env)
+  | _, _, .ite c t e, env => .ite (toList' c env) (toList' t env) (toList' e env)
 
 /-- A closed de Bruijn term translates to a closed old-language term. -/
 def toClosed {t : Tpe} (e : Trm [] t) : ListLanguage.Trm t := fun {_rep} => toList' e ()
@@ -91,6 +95,11 @@ theorem toList'_eval : ∀ {Γ : Ctx} {t : Tpe} (e : Trm Γ t) (ρ : Env Tpe.den
       | cons a l ih =>
         simp [Trm.eval, Trm'.eval, toList', ih_base, ih_step, Trm'.eval.go, listFold] at ⊢ ih
         rw [ih]
+  | false => intro env; rfl
+  | true => intro env; rfl
+  | le e1 e2 ih1 ih2 => intro env; simp only [toList', Trm.eval, Trm'.eval, ih1, ih2]
+  | ite c t e ihc iht ihe => intro env; simp only [toList', Trm.eval, Trm'.eval, ihe, iht, ihc]
+
 
 /-- **Translate a Problem**: a solved parametrized implementation of `inTpe ⟶ outTpe` (with
     the input introduced as the single parameter) becomes a genuine `ListLanguage.Impl`.

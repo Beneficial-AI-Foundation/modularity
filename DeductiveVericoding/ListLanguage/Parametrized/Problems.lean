@@ -46,7 +46,7 @@ def ReverseSolution : ReverseProblem := by
     listRecP
     · apply ConsPTactic
       · apply ParPTactic
-      apply NilPTactic'
+      apply NilPTactic
     simp
     pushpreP
     apply ConsPTactic

@@ -16,6 +16,12 @@ def NilPTactic {Γ : Ctx} : ImplP Γ .list (fun _ out => out = []) :=
 def UnitPTactic (Γ : Ctx) : ImplP Γ .unit (fun _ out => out = ()) :=
   { code := .unit, correct := fun _ => rfl}
 
+def TruePTactic (Γ : Ctx) : ImplP Γ .bool (fun _ out => out = true) :=
+  { code := .true, correct := fun _ => rfl}
+
+def FalsePTactic (Γ : Ctx) : ImplP Γ .bool (fun _ out => out = false) :=
+  { code := .false, correct := fun _ => rfl}
+
 def NumPTactic (Γ : Ctx) (n : Nat) :
     ImplP Γ .nat (fun _ out => out = n) :=
   { code := .num n, correct := fun _ => rfl}
@@ -29,6 +35,21 @@ def ConsPTactic (Γ : Ctx) (x : Env Tpe.denote Γ →  Nat) (xs : Env Tpe.denote
   (impl2 : ImplP Γ .list (fun env out => out = xs env)) :
     ImplP Γ .list (fun env out => out = x env :: xs env) :=
   { code := .cons impl1.code impl2.code
+    correct := fun env => by simp [Trm.eval, impl1.correct env, impl2.correct env] }
+
+def IfThenElsePtactic (Γ : Ctx) (s : Tpe) (c : Env Tpe.denote Γ →  Bool) (t e : Env Tpe.denote Γ → s.denote)
+  (impl_c : ImplP Γ .bool (fun env out => out = c env))
+  (impl_t : ImplP Γ s (fun env out => out = t env))
+  (impl_e : ImplP Γ s (fun env out => out = e env)) :
+    ImplP Γ s (fun env out => out = bif c env then t env else e env) :=
+  { code := .ite impl_c.code impl_t.code impl_e.code
+    correct := fun env => by simp [Trm.eval, impl_c.correct env, impl_t.correct env, impl_e.correct env] }
+
+def LePTactic (Γ : Ctx) (e1 e2 : Env Tpe.denote Γ → Nat)
+  (impl1 : ImplP Γ .nat (fun env out => out = e1 env))
+  (impl2 : ImplP Γ .nat (fun env out => out = e2 env)) :
+    ImplP Γ .bool (fun env out => out = Nat.ble (e1 env) (e2 env)) :=
+  { code := .le impl1.code impl2.code
     correct := fun env => by simp [Trm.eval, impl1.correct env, impl2.correct env] }
 
 /-- **Applied `listRec` combinator.** Folds `target` under an invariant `Inv` (which may

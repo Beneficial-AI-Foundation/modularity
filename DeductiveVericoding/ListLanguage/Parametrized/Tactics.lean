@@ -21,6 +21,107 @@ def RelaxCondPTactic {Γ : Ctx} {t : Tpe} (Cond Cond' : Env Tpe.denote Γ → t.
   (impl : ImplP Γ t Cond') (h : ∀ env, ∀ out,  Cond' env out → Cond env out) : ImplP Γ t Cond :=
   { code := impl.code, correct := fun env => h env _ (impl.correct env)}
 
+/-- Peel a chain of second projections `·.2.2.…`, returning the number of `snd`s and the core.
+    Handles both the structure-projection node `Expr.proj Prod 1` and the `Prod.snd` app. -/
+partial def peelSnd : Expr → Nat × Expr
+  | .proj ``Prod 1 inner => let (n, base) := peelSnd inner; (n + 1, base)
+  | e =>
+    if e.isAppOfArity ``Prod.snd 3 then
+      let (n, base) := peelSnd e.appArg!
+      (n + 1, base)
+    else (0, e)
+
+/-- View `e` as a first projection `·.1`, returning the projected term. -/
+def asFst? : Expr → Option Expr
+  | .proj ``Prod 0 inner => some inner
+  | e => if e.isAppOfArity ``Prod.fst 3 then some e.appArg! else none
+
+/-- Decode a context literal `t₀ :: t₁ :: … :: []` into the array `#[t₀, t₁, …]`. -/
+partial def decodeCtx (Γ : Expr) : Array Expr :=
+  if Γ.isAppOfArity ``List.cons 3 then
+    #[Γ.getAppArgs[1]!] ++ decodeCtx Γ.getAppArgs[2]!
+  else #[]
+
+/-- Rewrite the projection form of an environment access back into `Env.getT` form, which is
+    what tactics like `ParPTactic` unify against. When `simp` destructures the `listRec` step
+    environment `⟨a, l, res, env⟩` it leaves projections `env.fst`, `env.2.2.fst`, …; this maps
+    `Prod.fst (Prod.snd^k env) ↦ Env.getT env k Γ[k]` and shifts a nested lookup
+    `Env.getT (Prod.snd^m env) j u ↦ Env.getT env (m+j) u`. -/
+def envAccessToGetT (env Γfull : Expr) (ctxTypes : Array Expr) (e : Expr) : Expr :=
+  e.replace fun sub =>
+    if let some inner := asFst? sub then
+      let (m, base) := peelSnd inner
+      if base == env && m < ctxTypes.size then
+        some (mkAppN (mkConst ``Env.getT) #[Γfull, env, mkNatLit m, ctxTypes[m]!])
+      else none
+    else if sub.isAppOfArity ``Env.getT 4 then
+      let args := sub.getAppArgs
+      let (m, base) := peelSnd args[1]!
+      if base == env && m > 0 then
+        match args[2]!.nat? with
+        | some j => some (mkAppN (mkConst ``Env.getT) #[Γfull, env, mkNatLit (m + j), args[3]!])
+        | none   => none
+      else none
+    else none
+
+/-- `pushpreP` specialises `RelaxCondPTactic` to the shape that shows up in a `listRec`
+    step goal after `simp`:
+```
+ImplP Γ t (fun env out => (x = s) → Post)
+```
+where the precondition is an *equality* `x = s` (typically `x` is an environment lookup
+`env.getT k u` holding the recursive result, and `s` the term it stands for). The same term
+`s` then appears inside `Post`. `pushpreP` rewrites `Post` by replacing every occurrence of
+`s` with `x`, drops the precondition, and relaxes to
+```
+Cond' := fun env out => Post[s ↦ x]
+```
+It applies `RelaxCondPTactic Cond Cond'`, discharging the side condition
+`Cond' env out → (x = s) → Post` automatically (rewrite `x = s` backwards in `Post`, then
+close with the `Cond'` hypothesis), leaving only the implementation subgoal `ImplP Γ t Cond'`. -/
+elab "pushpreP" : tactic => do
+  let goals ← getGoals
+  let goal := goals.head!
+  let restGoals := goals.tail!
+  let tgt ← instantiateMVars (← whnf (← goal.getType))
+  unless tgt.isAppOf ``ImplP do
+    throwError "pushpreP: goal is not `ImplP Γ t Cond`:{indentExpr tgt}"
+  let #[Γ, t, goalCond] := tgt.getAppArgs
+    | throwError "pushpreP: malformed `ImplP` goal:{indentExpr tgt}"
+  let cond' ← lambdaTelescope goalCond fun binders body => do
+    unless binders.size == 2 do
+      throwError "pushpreP: expected the goal condition to have the form `fun env out => …`"
+    let env := binders[0]!
+    let out := binders[1]!
+    let body ← whnf body
+    unless body.isArrow do
+      throwError "pushpreP: the condition is not of the form `Pre → Post`:{indentExpr body}"
+    let pre := body.bindingDomain!
+    let post := body.bindingBody!
+    unless pre.isAppOfArity ``Eq 3 do
+      throwError "pushpreP: the precondition is not an equality `x = s`:{indentExpr pre}"
+    let preArgs := pre.getAppArgs
+    let x := preArgs[1]!
+    let s := preArgs[2]!
+    unless (post.find? (· == s)).isSome do
+      throwError "pushpreP: the precondition's RHS does not occur in the postcondition; \
+        `pushpreP` is not applicable here"
+    let newPost := post.replace fun e => if e == s then some x else none
+    -- normalise `simp`-produced projections back to `Env.getT` so downstream tactics unify
+    let newPost := envAccessToGetT env Γ (decodeCtx Γ) newPost
+    mkLambdaFVars #[env, out] newPost
+  let e := mkAppN (mkConst ``RelaxCondPTactic) #[Γ, t, goalCond, cond']
+  let gs ← goal.apply e
+  let mut implGoals := #[]
+  for g in gs do
+    if ← g.withContext do return (← whnf (← g.getType)).isAppOf ``ImplP then
+      implGoals := implGoals.push g
+    else
+      -- discharge `Cond' env out → (x = s) → Post`
+      setGoals [g]
+      evalTactic (← `(tactic| intro env out hc hpre; rw [← hpre]; exact hc))
+  setGoals (implGoals.toList ++ restGoals)
+
 /-- The `intro` step: from an implementation in the extended context `s :: Γ`, build one
     of arrow type in context `Γ`. The bound value `v` is prepended to the environment in
     the condition — this is the substitution of the introduced parameter. -/
@@ -129,6 +230,46 @@ def ListRecPTactic (Γ : Ctx) (Inv : Env Tpe.denote Γ → List Nat → List Nat
       induction l with
       | nil => exact base.correct env
       | cons a l ih => exact step.correct (a, (l, (_, env))) ih}
+
+/-- `listRecP` is a zero-argument front-end for `ListRecPTactic`.
+
+Just like `introP`, the invariant `Inv` is a higher-order metavariable that `apply` cannot
+solve for, because the goal condition applies it to `f l` (a non-variable). `listRecP` reads
+the goal `ImplP Γ (.arrow .list .list) GoalCond` with `GoalCond = fun env f => ∀ l, body`,
+and reconstructs
+```
+Inv := fun env inp out => body[  f l ↦ out,  l ↦ inp  ]
+```
+(the ambient parameters `env` are kept as-is — unlike `introP` there is no context
+extension, so no de Bruijn shift). It then applies `ListRecPTactic Γ Inv`, leaving the two
+subgoals `base` and `step`. -/
+elab "listRecP" : tactic => do
+  let goal ← getMainGoal
+  let tgt ← instantiateMVars (← whnf (← goal.getType))
+  unless tgt.isAppOf ``ImplP do
+    throwError "listRecP: goal is not `ImplP Γ t Cond`:{indentExpr tgt}"
+  let #[Γ, _, goalCond] := tgt.getAppArgs
+    | throwError "listRecP: malformed `ImplP` goal:{indentExpr tgt}"
+  let listNat ← mkAppM ``List #[mkConst ``Nat]
+  let inv ← lambdaTelescope goalCond fun binders body => do
+    unless binders.size == 2 do
+      throwError "listRecP: expected the goal condition to have the form `fun env f => …`"
+    let f := binders[1]!
+    let body ← whnf body
+    unless body.isForall do
+      throwError "listRecP: the condition body must start with `∀ l, …`:{indentExpr body}"
+    forallBoundedTelescope body (some 1) fun vs ib => do
+      let l := vs[0]!
+      let fl := mkApp f l
+      withLocalDeclD `inp listNat fun inp => do
+      withLocalDeclD `out listNat fun out => do
+        let ib := ib.replace fun e =>
+          if e == fl then some out
+          else if e == l then some inp
+          else none
+        mkLambdaFVars #[binders[0]!, inp, out] ib
+  let e := mkAppN (mkConst ``ListRecPTactic) #[Γ, inv]
+  liftMetaTactic fun g => g.apply e
 
 def AppPTactic (Γ : Ctx) (s t : Tpe) (target : Env Tpe.denote Γ → s.denote) (Cond : Env Tpe.denote Γ → s.denote → t.denote → Prop)
   (base : ImplP Γ s (fun env out => out = target env))

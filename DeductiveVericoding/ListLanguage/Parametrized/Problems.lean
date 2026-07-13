@@ -21,18 +21,15 @@ abbrev AppendParameterProblem := ImplP [] (.arrow .nat (.arrow .list .list)) (fu
 
 def AppendParameterSolution : AppendParameterProblem := by
   introP
-  apply ListRecPTactic _ (fun env inp out => out = inp.append [env.getT 0 Tpe.nat])
+  listRecP
   · apply ConsPTactic
     · exact ParPTactic [Tpe.nat] Tpe.nat 0
     apply NilPTactic'
   · simp
-    apply RelaxCondPTactic (t:=.list) _ (fun env out => out = (env.getT 0 .nat) :: (env.getT 2 .list))
-    · apply ConsPTactic
-      · apply ParPTactic
-      apply ParPTactic
-    intro env out h1 h2
-    rw [← h2, h1]
-    rfl
+    pushpreP
+    apply ConsPTactic
+    · apply ParPTactic
+    apply ParPTactic
 
 #eval Trm.pretty (toClosed AppendParameterSolution.code)
 -- "(λ x0 : Nat => listRec((λ x1 : Unit => x0 :: []), (λ x2 : Nat => (λ x3 : List => (λ x4 : List => x2 :: x4)))))"
@@ -40,27 +37,21 @@ def AppendParameterSolution : AppendParameterProblem := by
 abbrev ReverseProblem := ImplP []  (.arrow .list .list) (fun _ f => ∀ l, f l = l.reverse)
 
 def ReverseSolution : ReverseProblem := by
-  apply ListRecPTactic _ (fun env inp out => out = inp.reverse)
+  listRecP
   · apply NilPTactic'
   · simp
-    apply RelaxCondPTactic (t:=.list) _ (fun env out => out = (env.getT 2 .list).append [env.getT 0 .nat])
-    · apply AppPTactic [Tpe.nat, Tpe.list, Tpe.list] .list .list _ (fun env l out => out = l.append [env.getT 0 Tpe.nat])
+    pushpreP
+    apply AppPTactic [Tpe.nat, Tpe.list, Tpe.list] .list .list _ (fun env l out => out = l.append [env.getT 0 Tpe.nat])
+    · apply ParPTactic
+    listRecP
+    · apply ConsPTactic
       · apply ParPTactic
-      apply ListRecPTactic _ (fun env inp out => out = inp.append [env.getT 0 Tpe.nat])
-      · apply ConsPTactic
-        · apply ParPTactic
-        apply NilPTactic'
-      simp
-      apply RelaxCondPTactic (t:=.list) _ (fun env out => out = (env.getT 0 .nat) :: (env.getT 2 .list))
-      · apply ConsPTactic
-        · apply ParPTactic
-        apply ParPTactic
-      intro env out h1 h2
-      rw [← h2, h1]
-      rfl
-    intro env out h1 h2
-    rw [← h2, h1]
-    rfl
+      apply NilPTactic'
+    simp
+    pushpreP
+    apply ConsPTactic
+    · apply ParPTactic
+    apply ParPTactic
 
 #eval Trm.pretty (toClosed ReverseSolution.code)
 -- "listRec((λ x0 : Unit => []), (λ x1 : Nat => (λ x2 : List => (λ x3 : List => listRec((λ x4 : Unit => x1 :: []), (λ x5 : Nat => (λ x6 : List => (λ x7 : List => x5 :: x7))))(x3)))))"

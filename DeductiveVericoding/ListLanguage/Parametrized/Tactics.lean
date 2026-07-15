@@ -1,5 +1,7 @@
 import DeductiveVericoding.ListLanguage.Parametrized.Basic
+import DeductiveVericoding.ListLanguage.Parametrized.VericodeRuleSet
 import Lean
+import Aesop
 
 open Lean Elab Tactic Meta
 
@@ -151,6 +153,8 @@ It applies `RelaxCondPTactic Cond Cond'`, discharging the side condition
 close with the `Cond'` hypothesis), leaving only the implementation subgoal `ImplP Γ t Cond'`. -/
 elab "pushpreP" : tactic => do
   let goals ← getGoals
+  if goals.isEmpty then
+    throwError "pushpreP: no goals"
   let goal := goals.head!
   let restGoals := goals.tail!
   let tgt ← instantiateMVars (← whnf (← goal.getType))
@@ -306,3 +310,50 @@ elab "listRecP" : tactic => do
         mkLambdaFVars #[binders[0]!, inp, out] ib
   let e := mkAppN (mkConst ``ListRecPTactic) #[Γ, inv]
   liftMetaTactic fun g => g.apply e
+
+/-! # THE `vericode` TACTIC
+
+`vericode` is a backtracking tree search over the vericoding combinators, implemented on top
+of `aesop`'s `VericodeP` rule set. Unlike a greedy `repeat first | …` loop, it can *revisit*
+a choice: if a preferred combinator leads to a dead end, the search backs out and tries the
+next candidate. This is what lets it close `ConsProblem` — recursion (`listRecP`) is tried
+first, but its `listRec` step goal cannot be discharged, so the search backtracks to `introP`
+and finds the trivial `introP; introP; cons; par; par` solution.
+
+The rule registrations below encode the required preferences using aesop's rule phases:
+
+* **goal-closing combinators are `safe`** (`NilPTactic`, `UnitPTactic`, `TruePTactic`,
+  `FalsePTactic`, `NumPTactic`, `ParPTactic`). Aesop tries `safe` rules first and commits to
+  them without backtracking — which is exactly right, since committing to a rule that fully
+  closes a goal is never a mistake. This gives "closers have precedence over all others".
+* **`listRecP` and `introP` are `unsafe`**, so aesop explores them with backtracking, highest
+  success-probability first. `listRecP` (90%) outranks `introP` (50%): recursion is preferred
+  over introduction, but the choice is now reversible.
+* the remaining structural combinators (`ConsPTactic`, `LePTactic`, `IfThenElsePtactic`) and
+  the `pushpreP` rewrite are `unsafe` too. Aesop's normalisation phase runs `simp` on each
+  goal before applying rules, which reduces a `listRec` step goal into the `Pre → Post` shape
+  that `pushpreP` consumes (mirroring the manual `simp; pushpreP` idiom in `Problems.lean`).
+-/
+
+-- Goal-closing combinators: safe (committed) `apply` rules.
+attribute [aesop safe apply (rule_sets := [VericodeP])]
+  NilPTactic UnitPTactic TruePTactic FalsePTactic NumPTactic ParPTactic
+
+-- Structural combinators: unsafe (backtrackable) `apply` rules.
+attribute [aesop unsafe 70% apply (rule_sets := [VericodeP])]
+  ConsPTactic LePTactic IfThenElsePtactic
+
+-- The higher-order front-ends solve metavariables (`Inv`, residual `Cond`) that a bare
+-- `apply` cannot, so they are registered as `tactic` rules via thin `TacticM` wrappers.
+-- `listRecP` outranks `introP`: recursion preferred, but backtrackable.
+@[aesop unsafe 90% tactic (rule_sets := [VericodeP])]
+def listRecPRule : TacticM Unit := do evalTactic (← `(tactic| listRecP))
+
+@[aesop unsafe 50% tactic (rule_sets := [VericodeP])]
+def introPRule : TacticM Unit := do evalTactic (← `(tactic| introP))
+
+@[aesop unsafe 95% tactic (rule_sets := [VericodeP])]
+def pushprePRule : TacticM Unit := do evalTactic (← `(tactic| pushpreP))
+
+/-- Search for a vericoding derivation by backtracking over the `VericodeP` rule set. -/
+macro "vericode" : tactic => `(tactic| aesop (rule_sets := [VericodeP]))

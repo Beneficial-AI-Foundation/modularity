@@ -82,14 +82,15 @@ def AppendParameterSolution' : AppendParameterProblem := by vericode
 
 def AppendListSolution' : AppendListProblem := by vericode
 
--- `Reverse` and the swapped append both need `appListP`: a `List → List` helper built by
--- `listRec` and applied to an in-scope list. For the swapped append the search must backtrack
--- over the two list arguments (only `l1` works).
 def ReverseSolution' : ReverseProblem := by vericode
 
 abbrev AppenListProblem_swapped := ImplP [] (.arrow .list (.arrow .list .list)) (fun _ f ↦ ∀ l1, ∀ l2, f l1 l2 = l1.append l2)
 
 def AppendListSolution_swapped : AppenListProblem_swapped := by vericode
+
+abbrev List123Problem := ImplP [] (.arrow .unit .list) (fun _ out => ∀ x, out x = [1,2,3])
+
+def List123Solution : List123Problem := by vericode
 
 #eval Trm.pretty (toClosed ConsSolution'.code)
 #eval Trm.pretty (toClosed AppendParameterSolution'.code)

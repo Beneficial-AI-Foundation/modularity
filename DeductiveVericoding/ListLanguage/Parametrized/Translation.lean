@@ -48,15 +48,32 @@ def toList' {rep : Tpe → Type} : {Γ : Ctx} → {t : Tpe} → Trm Γ t → Env
 /-- A closed de Bruijn term translates to a closed old-language term. -/
 def toClosed {t : Tpe} (e : Trm [] t) : ListLanguage.Trm t := fun {_rep} => toList' e ()
 
+theorem default_eval {t : Tpe} : (default : Trm' Tpe.denote t).eval = default := by
+  induction t with
+  | unit => rfl
+  | bool => rfl
+  | nat => rfl
+  | pair _ _ ih1 ih2 => simp [Trm'.eval, ih1, ih2]; rfl
+  | arrow _ _ _ ih2 => simp [Trm'.eval, ih2]; rfl
+  | list => rfl
+
+
+theorem default_unit {t : Tpe} (h : t = Tpe.unit) : h ▸ (default : Tpe.unit.denote) = (default : t.denote) := by grind only
+
 /-- The translation preserves the parameter-lookup value. -/
 theorem parTrans_eval : {Γ : Ctx} → (ρ : Env Tpe.denote Γ) → (i : Nat) → (t : Tpe) →
     (parTrans ρ i t).eval = Env.getT ρ i t
-  | [], _, _, t => sorry
-  | s :: _, (_, _), 0, t => by
+  | [], env, i, t => by
+    simp [parTrans, Env.getT, default_eval, Env.get]
+    intro h
+    rw [← default_unit h.symm]
+    rfl
+  | s :: _, (x, _), 0, t => by
     by_cases h : s = t
-    · simp [parTrans, Env.getT, dif_pos h, Trm'.eval, Env.get]
-      sorry
-    sorry
+    · simp [parTrans, Env.getT, dif_pos h, Env.get]
+      have : h ▸ Trm'.var x = Trm'.var  (h ▸ x) := by grind only
+      rw [this, Trm'.eval]
+    simp [Env.getT, h, parTrans, default_eval]
   | _ :: _, (_, ρ), i + 1, t => parTrans_eval ρ i t
 
 /-- The old-language `listRec` (curried step `head → tail → rec`) evaluates as `listFold`. -/

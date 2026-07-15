@@ -355,5 +355,78 @@ def introPRule : TacticM Unit := do evalTactic (← `(tactic| introP))
 @[aesop unsafe 95% tactic (rule_sets := [VericodeP])]
 def pushprePRule : TacticM Unit := do evalTactic (← `(tactic| pushpreP))
 
+/-- Collect every `.list`-typed parameter access `env.getT k .list` occurring as a subterm of
+`e` (against the given environment fvar `env`). These are the candidate arguments to which
+`appListP` can apply a `List → List` helper. -/
+partial def collectListParams (env : Expr) (e : Expr) : Array Expr :=
+  let here : Array Expr :=
+    if e.isAppOfArity ``Env.getT 4 && e.getAppArgs[1]! == env
+        && e.getAppArgs[3]!.isConstOf ``Tpe.list then #[e] else #[]
+  let sub : Array Expr :=
+    match e with
+    | .app f a       => collectListParams env f ++ collectListParams env a
+    | .lam _ d b _   => collectListParams env d ++ collectListParams env b
+    | .forallE _ d b _ => collectListParams env d ++ collectListParams env b
+    | .letE _ t v b _ => collectListParams env t ++ collectListParams env v ++ collectListParams env b
+    | .mdata _ b     => collectListParams env b
+    | .proj _ _ b    => collectListParams env b
+    | _              => #[]
+  here ++ sub
+
+open Aesop in
+/-- `appListP` is the aesop rule that introduces an application `.app g arg` where `g : List → List`
+is a helper to be built by `listRec` and `arg` is some in-scope list. It fires on a goal
+`ImplP Γ .list (fun env out => out = rhs)`: for each `.list`-typed parameter `c = env.getT k .list`
+occurring properly inside `rhs`, it abstracts `c` and applies `AppPTactic` with
+`target := fun env => c` and `Cond := fun env x out => out = rhs[c ↦ x]`, leaving `base` (closed by
+`ParPTactic`) and a `List → List` `step` goal (closed by `listRecP`).
+
+Because the right choice of `c` is not decidable up front (for `l1 ++ l2` only `l1` works, not
+`l2`), it is a `RuleTac` returning **one alternative per candidate** so aesop backtracks over them.
+Modelled on aesop's own `applyConsts`. -/
+def appListP : Aesop.RuleTac := fun input => input.goal.withContext do
+  let tgt ← whnf (← input.goal.getType)
+  unless tgt.isAppOf ``ImplP do throwError "appListP: goal is not `ImplP`"
+  let #[Γ, t, goalCond] := tgt.getAppArgs
+    | throwError "appListP: malformed `ImplP` goal"
+  unless (← whnf t).isConstOf ``Tpe.list do throwError "appListP: goal type is not `.list`"
+  -- Build one `AppPTactic …` application term per candidate list argument.
+  let es ← lambdaTelescope goalCond fun binders body => do
+    unless binders.size == 2 do throwError "appListP: unexpected condition shape"
+    let env := binders[0]!
+    let out := binders[1]!
+    let body ← whnf body
+    unless body.isAppOfArity ``Eq 3 do throwError "appListP: condition is not an equality"
+    let args := body.getAppArgs
+    unless args[1]! == out do throwError "appListP: equality LHS is not the output"
+    let rhs := args[2]!
+    let cands := (collectListParams env rhs).foldl (init := (#[] : Array Expr))
+      fun acc c => if acc.any (· == c) || c == rhs then acc else acc.push c
+    if cands.isEmpty then throwError "appListP: no proper list-parameter candidates"
+    let listTpe := mkConst ``Tpe.list
+    let listNat ← mkAppM ``List #[mkConst ``Nat]
+    cands.mapM fun c => do
+      let target ← mkLambdaFVars #[env] c
+      withLocalDeclD `x listNat fun x => do
+        let rhs' := rhs.replace fun e => if e == c then some x else none
+        let cond ← mkLambdaFVars #[env, x, out] (← mkEq out rhs')
+        pure <| mkAppN (mkConst ``AppPTactic) #[Γ, listTpe, listTpe, target, cond]
+  -- Turn each application term into a backtrackable rule application.
+  let initialState ← saveState
+  let mut rapps : Array RuleApplication := #[]
+  for e in es do
+    try
+      let gs ← input.goal.apply e
+      let postState ← saveState
+      let subgoals ← gs.toArray.mapM (mvarIdToSubgoal input.goal ·)
+      rapps := rapps.push
+        { goals := subgoals, postState, scriptSteps? := none, successProbability? := none }
+    catch _ => pure ()
+    finally restoreState initialState
+  if rapps.isEmpty then throwError "appListP: no candidate applied"
+  return { applications := rapps }
+
+attribute [aesop unsafe 25% (rule_sets := [VericodeP]) tactic] appListP
+
 /-- Search for a vericoding derivation by backtracking over the `VericodeP` rule set. -/
 macro "vericode" : tactic => `(tactic| aesop (rule_sets := [VericodeP]))

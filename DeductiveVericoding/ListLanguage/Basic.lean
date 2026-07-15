@@ -91,7 +91,6 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
   | num : Nat → Trm' rep .nat
   | cons : Trm' rep .nat → Trm' rep .list → Trm' rep .list
   | var : {t : Tpe} → rep t → Trm' rep t
-  | insert : Trm' rep .nat → Trm' rep .list → Trm' rep .list
   | mkPair : {t u : Tpe} → Trm' rep t → Trm' rep u → Trm' rep (.pair t u)
   | fst : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep t
   | snd : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep u
@@ -134,10 +133,6 @@ def Trm'.prettyAux : {t : Tpe} → Trm' (fun _ => String) t → Nat → String �
       let (tls, n2) := tl.prettyAux n1
       (s!"{hds} :: {tls}", n2)
   | _, .var x, n => (x, n)
-  | _, .insert e1 e2, n =>
-      let (s1, n1) := e1.prettyAux n
-      let (s2, n2) := e2.prettyAux n1
-      (s!"insert({s1}, {s2})", n2)
   | _, .mkPair e1 e2, n =>
       let (s1, n1) := e1.prettyAux n
       let (s2, n2) := e2.prettyAux n1
@@ -186,10 +181,6 @@ instance {t : Tpe} : ToString (Trm t) := ⟨Trm.pretty⟩
 
 /-! ## Semantics -/
 
-def insertVal (a : Nat) : List Nat → List Nat
-  | [] => [a]
-  | h :: t => if a ≤ h then a :: h :: t else h :: insertVal a t
-
 /-- Evaluate a term with `rep = Tpe.denote`.
     Variables hold their values directly - no context lookup needed!
     This is the key PHOAS insight: Lean handles substitution automatically.
@@ -202,7 +193,6 @@ def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
   | _, .num n => n
   | _, .cons hd tl => hd.eval :: tl.eval
   | _, .var x => x  -- x is already the value!
-  | _, .insert e1 e2 => insertVal e1.eval e2.eval
   | _, .mkPair e1 e2 => (e1.eval, e2.eval)
   | _, .fst e => e.eval.1
   | _, .snd e => e.eval.2
@@ -231,20 +221,18 @@ def Trm.eval {t : Tpe} (e : Trm t) : t.denote :=
 /-- General implementation structure with embedded correctness proof.
 
     Parameters:
-    - `ParBase` : the parameter type (for parameterized correctness)
     - `inTpe` : the DSL input type
     - `outTpe` : the DSL output type
     - `Pre` : precondition on parameter and input
     - `Post` : postcondition relating parameter, input, and output (also receives proof of Pre)
 
     The code type is `.arrow inTpe outTpe`, so `code.eval : inTpe.denote → outTpe.denote`. -/
-structure Impl (ParBase : Type) (inTpe outTpe : Tpe)
-    (Pre : ParBase → inTpe.denote → Prop)
-    (Post : (par : ParBase) → (inp : inTpe.denote) → Pre par inp → outTpe.denote → Prop) where
+structure Impl (inTpe outTpe : Tpe)
+    (Pre : inTpe.denote → Prop)
+    (Post : inTpe.denote → outTpe.denote → Prop) where
   /-- The term implementing the function -/
   code : Trm (.arrow inTpe outTpe)
   /-- Correctness: precondition implies postcondition after evaluation -/
-  correct : ∀ (par : ParBase) (inp : inTpe.denote) (hpre : Pre par inp),
-    Post par inp hpre (code.eval inp)
+  correct : ∀ inp, Pre inp →  Post inp (code.eval inp)
 
 end ListLanguage

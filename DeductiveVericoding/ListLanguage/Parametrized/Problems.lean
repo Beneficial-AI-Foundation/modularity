@@ -69,3 +69,19 @@ def AppendListSolution : AppendListProblem := by
   apply ParPTactic
 
 #eval Trm.pretty (toClosed AppendListSolution.code)
+
+/- # `vericode` smoke tests
+
+`vericode` closes these problems outright, with no manual guidance. `ConsProblem` in
+particular requires backtracking: recursion (`listRecP`) is tried first but dead-ends on
+its `listRec` step, so the search falls back to a second `introP`. -/
+
+def ConsSolution' : ConsProblem := by vericode
+
+def AppendParameterSolution' : AppendParameterProblem := by vericode
+
+def AppendListSolution' : AppendListProblem := by vericode
+
+#eval Trm.pretty (toClosed ConsSolution'.code)
+#eval Trm.pretty (toClosed AppendParameterSolution'.code)
+#eval Trm.pretty (toClosed AppendListSolution'.code)

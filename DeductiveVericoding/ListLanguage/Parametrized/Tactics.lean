@@ -428,5 +428,15 @@ def appListP : Aesop.RuleTac := fun input => input.goal.withContext do
 
 attribute [aesop unsafe 25% (rule_sets := [VericodeP]) tactic] appListP
 
-/-- Search for a vericoding derivation by backtracking over the `VericodeP` rule set. -/
-macro "vericode" : tactic => `(tactic| aesop (rule_sets := [VericodeP]))
+/-- Search for a vericoding derivation by backtracking over the `VericodeP` rule set.
+
+`vericode [f, g, …]` additionally hands `f`, `g`, … to aesop as **norm-simp** lemmas, so they are
+unfolded at every node of the search (mirroring `simp [f, g]`). Use this to expose
+problem-specific definitions — e.g. `vericode [insertVal, sorted]` — that the combinators would
+otherwise not see through. -/
+syntax "vericode" (" [" ident,* "]")? : tactic
+macro_rules
+  | `(tactic| vericode)         => `(tactic| aesop (rule_sets := [VericodeP]))
+  | `(tactic| vericode [$ls,*]) => do
+      let rules ← ls.getElems.mapM fun l => `(Aesop.rule_expr| norm simp $l:ident)
+      `(tactic| aesop (rule_sets := [VericodeP]) (add $rules,*))

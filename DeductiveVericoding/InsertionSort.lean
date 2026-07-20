@@ -233,20 +233,20 @@ def Trm.eval {t : Tpe} (e : Trm t) : t.denote :=
 /-- General implementation structure with embedded correctness proof.
 
     Parameters:
-    - `ParBase` : the parameter type (for parameterized correctness)
+    - `ParTpe` : the parameter type (for parameterized correctness)
     - `inTpe` : the DSL input type
     - `outTpe` : the DSL output type
     - `Pre` : precondition on parameter and input
     - `Post` : postcondition relating parameter, input, and output (also receives proof of Pre)
 
     The code type is `.arrow inTpe outTpe`, so `code.eval : inTpe.denote → outTpe.denote`. -/
-structure Impl (ParBase : Type) (inTpe outTpe : Tpe)
-    (Pre : ParBase → inTpe.denote → Prop)
-    (Post : (par : ParBase) → (inp : inTpe.denote) → Pre par inp → outTpe.denote → Prop) where
+structure Impl (ParTpe : Type) (inTpe outTpe : Tpe)
+    (Pre : ParTpe → inTpe.denote → Prop)
+    (Post : (par : ParTpe) → (inp : inTpe.denote) → Pre par inp → outTpe.denote → Prop) where
   /-- The term implementing the function -/
   code : Trm (.arrow inTpe outTpe)
   /-- Correctness: precondition implies postcondition after evaluation -/
-  correct : ∀ (par : ParBase) (inp : inTpe.denote) (hpre : Pre par inp),
+  correct : ∀ (par : ParTpe) (inp : inTpe.denote) (hpre : Pre par inp),
     Post par inp hpre (code.eval inp)
 
 /-- List implementation: transforms a list to a list (no parameter).
@@ -255,6 +255,15 @@ structure Impl (ParBase : Type) (inTpe outTpe : Tpe)
     - Correctness: `Pre inp → Post inp hpre (code.eval inp)` -/
 abbrev ListImpl (Pre : List Nat → Prop) (Post : (inp : List Nat) → Pre inp → List Nat → Prop) :=
   Impl Unit .list .list (fun _ => Pre) (fun _ => Post)
+
+/-- Parameterized list implementation: transforms a list to a list with a List Nat parameter.
+    - ParTpe: `List Nat`
+    - inTpe: `.list`, outTpe: `.list`
+    - Code type: `.arrow .list .list` (function from list to list)
+    - Correctness: `Pre par inp → Post par inp hpre (code.eval inp)` -/
+abbrev ParListImpl (Pre : List Nat → List Nat → Prop)
+    (Post : (par : List Nat) → (inp : List Nat) → Pre par inp → List Nat → Prop) :=
+  Impl (List Nat) .list .list Pre Post
 
 /-- Base case implementation: produces a list from unit input.
     - inTpe: `.unit`, outTpe: `.list`
@@ -296,7 +305,7 @@ abbrev InsertImpl :=
 
 /-! ## Properties of insertVal -/
 
-theorem insertVal_sorted (a : Nat) (l : List Nat) (hs : Ordered l) :
+theorem insertVal_ordered (a : Nat) (l : List Nat) (hs : Ordered l) :
     Ordered (insertVal a l) := by
   induction l with
   | nil => trivial
@@ -363,7 +372,7 @@ def insertImpl : StepImpl Sorted :=
   { code := fun {_rep} => Trm'.lam fun p =>
       Trm'.insert (.fst (.var p)) (.snd (.var p))
     correct := fun _tail ⟨a, sorted_tail⟩ ⟨h_ord, h_perm⟩ =>
-      ⟨insertVal_sorted a sorted_tail h_ord,
+      ⟨insertVal_ordered a sorted_tail h_ord,
        (h_perm.cons a).trans (insertVal_perm a sorted_tail)⟩ }
 
 /-! ## Synthesized Insert using listRec -/
@@ -440,7 +449,7 @@ def synthesizedInsert : InsertImpl :=
             simp only [ih ht_ord, hble, cond_false, hle, ite_false]
       simp only [Trm.eval, Trm'.eval]
       have hl' : Ordered l := hl
-      convert And.intro (insertVal_sorted a l hl') (insertVal_perm a l) using 2 <;>
+      convert And.intro (insertVal_ordered a l hl') (insertVal_perm a l) using 2 <;>
         exact heq l hl'
   }
 
@@ -522,14 +531,14 @@ def Trm'.eval : Trm' Tpe.denote t → t.denote
 Implementations use DSL types directly:
 
 ```
-structure Impl (ParBase : Type) (inTpe outTpe : Tpe)
-    (Pre : ParBase → inTpe.denote → Prop)
-    (Post : (par : ParBase) → (inp : inTpe.denote) → Pre par inp → outTpe.denote → Prop) where
+structure Impl (ParTpe : Type) (inTpe outTpe : Tpe)
+    (Pre : ParTpe → inTpe.denote → Prop)
+    (Post : (par : ParTpe) → (inp : inTpe.denote) → Pre par inp → outTpe.denote → Prop) where
   code : Trm (.arrow inTpe outTpe)           -- Code is always a function
   correct : ∀ par inp hpre, Post par inp hpre (code.eval inp)
 ```
 
-The `ParBase` parameter allows correctness to be parameterized (e.g., by a tail list).
+The `ParTpe` parameter allows correctness to be parameterized (e.g., by a tail list).
 
 Specializations:
 
@@ -543,7 +552,7 @@ abbrev BaseImpl Inv := Impl Unit .unit .list (fun _ _ => True) (fun _ _ _ out =>
 abbrev StepImpl Inv := Impl (List Nat) (.pair .nat .list) .list
     (fun tail ⟨_, sorted_tail⟩ => Inv tail sorted_tail)
     (fun tail ⟨a, _⟩ _ out => Inv (a :: tail) out)
--- ParBase = List Nat, inTpe = .pair .nat .list, outTpe = .list
+-- ParTpe = List Nat, inTpe = .pair .nat .list, outTpe = .list
 ```
 
 The `correct` field proves: `Pre par inp → Post par inp hpre (code.eval inp)`.

@@ -3,7 +3,7 @@ import DeductiveVericoding.ListLanguage.Parametrized.Translation
 
 open ListLanguage
 
-namespace Parametrized
+namespace Parametrized.HackyInsetionSort
 
 def insertVal (a : Nat) : List Nat → List Nat
   | [] => [a]

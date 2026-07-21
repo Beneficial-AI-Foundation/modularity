@@ -96,7 +96,9 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
   | snd : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep u
   | lam : {t u : Tpe} → (rep t → Trm' rep u) → Trm' rep (.arrow t u)
   | app : {t u : Tpe} → Trm' rep (.arrow t u) → Trm' rep t → Trm' rep u
-  | listRec : Trm' rep (.arrow .unit .list) → Trm' rep (.arrow .nat (.arrow .list (.arrow .list .list))) → Trm' rep (.arrow .list .list)
+  | listRec {t : Tpe} : Trm' rep (.arrow t .list) →
+   Trm' rep (.arrow (.pair .nat (.pair .list (.pair .list t))) .list) →
+   Trm' rep (.arrow (.pair .list t) .list)
   -- Boolean operations
   | true : Trm' rep .bool
   | false : Trm' rep .bool
@@ -108,10 +110,6 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
 
 /-- Closed terms are polymorphic over all variable representations -/
 def Trm (t : Tpe) := {rep : Tpe → Type} → Trm' rep t
-
-/-- Smart constructor for closed listRec terms -/
-def Trm.listRec (base : Trm (.arrow .unit .list)) (step : Trm (.arrow .nat (.arrow .list (.arrow .list .list)))) : Trm (.arrow .list .list) :=
-  fun {_rep} => Trm'.listRec base step
 
 /-- Pretty-print a type -/
 def Tpe.pretty : Tpe → String
@@ -198,13 +196,14 @@ def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
   | _, .snd e => e.eval.2
   | _, .lam f => fun v => (f v).eval  -- Lean handles binding
   | _, .app f arg => f.eval arg.eval
-  | _, .listRec base step =>
-      let baseVal := base.eval ()
+  | _, .listRec base step => by
+      intro p
+      let baseVal := base.eval p.2
       let stepVal := step.eval
       let rec go : List Nat → List Nat
         | [] => baseVal
-        | a :: tl => stepVal a tl (go tl)
-      go
+        | a :: tl => stepVal (a, (tl, (go tl, p.2)))
+      exact go p.1
   | _, .true => Bool.true
   | _, .false => Bool.false
   | _, .le e1 e2 => Nat.ble e1.eval e2.eval

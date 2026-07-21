@@ -434,9 +434,9 @@ attribute [aesop unsafe 25% (rule_sets := [VericodeP]) tactic] appListP
 unfolded at every node of the search (mirroring `simp [f, g]`). Use this to expose
 problem-specific definitions — e.g. `vericode [insertVal, sorted]` — that the combinators would
 otherwise not see through. -/
-syntax "vericode" (" [" ident,* "]")? : tactic
+syntax "vericodeP" (" [" ident,* "]")? : tactic
 macro_rules
-  | `(tactic| vericode)         => `(tactic| aesop (rule_sets := [VericodeP]))
-  | `(tactic| vericode [$ls,*]) => do
+  | `(tactic| vericodeP)         => `(tactic| aesop (rule_sets := [VericodeP]))
+  | `(tactic| vericodeP [$ls,*]) => do
       let rules ← ls.getElems.mapM fun l => `(Aesop.rule_expr| norm simp $l:ident)
       `(tactic| aesop (rule_sets := [VericodeP]) (add $rules,*))

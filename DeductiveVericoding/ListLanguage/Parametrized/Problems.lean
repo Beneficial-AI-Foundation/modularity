@@ -76,21 +76,20 @@ def AppendListSolution : AppendListProblem := by
 particular requires backtracking: recursion (`listRecP`) is tried first but dead-ends on
 its `listRec` step, so the search falls back to a second `introP`. -/
 
-def ConsSolution' : ConsProblem := by vericode
+def ConsSolution' : ConsProblem := by vericodeP
 
-def AppendParameterSolution' : AppendParameterProblem := by vericode
+def AppendParameterSolution' : AppendParameterProblem := by vericodeP
+def AppendListSolution' : AppendListProblem := by vericodeP
 
-def AppendListSolution' : AppendListProblem := by vericode
-
-def ReverseSolution' : ReverseProblem := by vericode
+def ReverseSolution' : ReverseProblem := by vericodeP
 
 abbrev AppenListProblem_swapped := ImplP [] (.arrow .list (.arrow .list .list)) (fun _ f ↦ ∀ l1, ∀ l2, f l1 l2 = l1.append l2)
 
-def AppendListSolution_swapped : AppenListProblem_swapped := by vericode
+def AppendListSolution_swapped : AppenListProblem_swapped := by vericodeP
 
 abbrev List123Problem := ImplP [] (.arrow .unit .list) (fun _ out => ∀ x, out x = [1,2,3])
 
-def List123Solution : List123Problem := by vericode
+def List123Solution : List123Problem := by vericodeP
 
 #eval Trm.pretty (toClosed ConsSolution'.code)
 #eval Trm.pretty (toClosed AppendParameterSolution'.code)

@@ -19,6 +19,6 @@ abbrev InsertionSortProblem := ImplP [] (.arrow .list .list) (fun _ f => ∀ l, 
 -- problem-specific definitions. `insertVal` uses `bif Nat.ble a h` (a `Bool`), so the
 -- if-then-else condition becomes `Nat.ble a h` and `LePTactic` closes it — no `decide` in sight.
 def InsertionSortSolution : InsertionSortProblem := by
-  vericode [insertVal, sorted]
+  vericodeP [insertVal, sorted]
 
 #eval Trm.pretty (toClosed InsertionSortSolution.code)

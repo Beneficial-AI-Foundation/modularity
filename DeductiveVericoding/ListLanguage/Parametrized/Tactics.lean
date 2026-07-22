@@ -15,31 +15,31 @@ open ListLanguage
 def NilPTactic {Γ : Ctx} : ImplP Γ .list (fun _ out => out = []) :=
   { code := .nil, correct := fun _ => rfl}
 
-def UnitPTactic (Γ : Ctx) : ImplP Γ .unit (fun _ out => out = ()) :=
+def UnitPTactic {Γ : Ctx} : ImplP Γ .unit (fun _ out => out = ()) :=
   { code := .unit, correct := fun _ => rfl}
 
-def TruePTactic (Γ : Ctx) : ImplP Γ .bool (fun _ out => out = true) :=
+def TruePTactic {Γ : Ctx} : ImplP Γ .bool (fun _ out => out = true) :=
   { code := .true, correct := fun _ => rfl}
 
-def FalsePTactic (Γ : Ctx) : ImplP Γ .bool (fun _ out => out = false) :=
+def FalsePTactic {Γ : Ctx} : ImplP Γ .bool (fun _ out => out = false) :=
   { code := .false, correct := fun _ => rfl}
 
-def NumPTactic (Γ : Ctx) (n : Nat) :
+def NumPTactic {Γ : Ctx} (n : Nat) :
     ImplP Γ .nat (fun _ out => out = n) :=
   { code := .num n, correct := fun _ => rfl}
 
-def ParPTactic (Γ : Ctx) (t : Tpe) (n : Nat) :
+def ParPTactic {Γ : Ctx} (t : Tpe) (n : Nat) :
     ImplP Γ t (fun env out => out = env.getT n t) :=
   { code := .par n t, correct := fun _ => rfl}
 
-def ConsPTactic (Γ : Ctx) (x : Env Tpe.denote Γ →  Nat) (xs : Env Tpe.denote Γ → List Nat)
+def ConsPTactic {Γ : Ctx} (x : Env Tpe.denote Γ →  Nat) (xs : Env Tpe.denote Γ → List Nat)
   (impl1 : ImplP Γ .nat (fun env out => out = x env))
   (impl2 : ImplP Γ .list (fun env out => out = xs env)) :
     ImplP Γ .list (fun env out => out = x env :: xs env) :=
   { code := .cons impl1.code impl2.code
     correct := fun env => by simp [Trm.eval, impl1.correct env, impl2.correct env] }
 
-def IfThenElsePtactic (Γ : Ctx) (s : Tpe) (c : Env Tpe.denote Γ →  Bool) (t e : Env Tpe.denote Γ → s.denote)
+def IfThenElsePtactic {Γ : Ctx} (s : Tpe) (c : Env Tpe.denote Γ →  Bool) (t e : Env Tpe.denote Γ → s.denote)
   (impl_c : ImplP Γ .bool (fun env out => out = c env))
   (impl_t : ImplP Γ s (fun env out => out = t env))
   (impl_e : ImplP Γ s (fun env out => out = e env)) :
@@ -47,7 +47,7 @@ def IfThenElsePtactic (Γ : Ctx) (s : Tpe) (c : Env Tpe.denote Γ →  Bool) (t 
   { code := .ite impl_c.code impl_t.code impl_e.code
     correct := fun env => by simp [Trm.eval, impl_c.correct env, impl_t.correct env, impl_e.correct env] }
 
-def LePTactic (Γ : Ctx) (e1 e2 : Env Tpe.denote Γ → Nat)
+def LePTactic {Γ : Ctx} (e1 e2 : Env Tpe.denote Γ → Nat)
   (impl1 : ImplP Γ .nat (fun env out => out = e1 env))
   (impl2 : ImplP Γ .nat (fun env out => out = e2 env)) :
     ImplP Γ .bool (fun env out => out = Nat.ble (e1 env) (e2 env)) :=
@@ -58,7 +58,7 @@ def LePTactic (Γ : Ctx) (e1 e2 : Env Tpe.denote Γ → Nat)
     read the ambient parameters `Γ`). On `a :: l` the `step` runs in the context extended
     with the head `a` (`.par 0`), the tail `l` (`.par 1`) and the recursive result `res`
     (`.par 2`), and must turn `Inv l res` into `Inv (a :: l) out`. Produces a `.list`. -/
-def ListRecPTactic (Γ : Ctx) (Inv : Env Tpe.denote Γ → List Nat → List Nat → Prop)
+def ListRecPTactic {Γ : Ctx} (Inv : Env Tpe.denote Γ → List Nat → List Nat → Prop)
     (base : ImplP Γ .list (fun env out => Inv env [] out))
     (step : ImplP (.nat :: .list :: .list :: Γ) .list (fun ⟨a, l, res, env⟩ out => Inv env l res → Inv env (a :: l) out)) :
     ImplP Γ (.arrow .list .list) (fun env f => ∀ l, Inv env l (f l)) :=
@@ -77,12 +77,12 @@ def RelaxCondPTactic {Γ : Ctx} {t : Tpe} (Cond Cond' : Env Tpe.denote Γ → t.
 /-- The `intro` step: from an implementation in the extended context `s :: Γ`, build one
     of arrow type in context `Γ`. The bound value `v` is prepended to the environment in
     the condition — this is the substitution of the introduced parameter. -/
-def IntroPTactic (Γ : Ctx) (s t : Tpe) (Cond : Env Tpe.denote (s :: Γ) → t.denote → Prop)
+def IntroPTactic {Γ : Ctx} (s t : Tpe) (Cond : Env Tpe.denote (s :: Γ) → t.denote → Prop)
     (impl : ImplP (s :: Γ) t Cond) :
     ImplP Γ (.arrow s t) (fun env f => ∀ v, Cond (v, env) (f v)) :=
   { code := .lam impl.code, correct := fun env v => impl.correct (v, env) }
 
-def AppPTactic (Γ : Ctx) (s t : Tpe) (target : Env Tpe.denote Γ → s.denote) (Cond : Env Tpe.denote Γ → s.denote → t.denote → Prop)
+def AppPTactic {Γ : Ctx} (s t : Tpe) (target : Env Tpe.denote Γ → s.denote) (Cond : Env Tpe.denote Γ → s.denote → t.denote → Prop)
   (base : ImplP Γ s (fun env out => out = target env))
   (step : ImplP Γ (.arrow s t) (fun env f => ∀ x, Cond env x (f x))) :
     ImplP Γ t (fun env out => Cond env (target env) out) :=
@@ -90,6 +90,21 @@ def AppPTactic (Γ : Ctx) (s t : Tpe) (target : Env Tpe.denote Γ → s.denote) 
       rw [Trm.eval, base.correct]
       exact step.correct env (target env)
   }
+
+def IfThenElsePtactic' {Γ : Ctx} {s : Tpe} {Cond : Env Tpe.denote Γ → s.denote → Prop} (c : Env Tpe.denote Γ → Bool)
+  (impl_c : ImplP Γ .bool (fun env out => out = c env))
+  (impl_t : ImplP Γ s (fun env out => c env → Cond env out))
+  (impl_e : ImplP Γ s (fun env out => (¬ c env) → Cond env out)) :
+    ImplP Γ s Cond :=
+  { code := .ite impl_c.code impl_t.code impl_e.code
+    correct env := by by_cases h : c env = true <;> simp [Trm.eval, impl_c.correct, h, impl_t.correct env, impl_e.correct env] }
+
+def UsePTactic {Γ : Ctx} {s : Tpe} {Cond : Env Tpe.denote Γ → s.denote → Prop}
+  (f : Env Tpe.denote Γ → s.denote) (hf : ∀ env, Cond env (f env))
+  (implf : ImplP Γ s (fun env out => out = f env) ) :
+  ImplP Γ s Cond :=
+    { code := implf.code
+      correct env := by simp [implf.correct, hf env] }
 
 /-! # MACROS : Zero Argument versions of the above tactics, for easier vericoding-/
 

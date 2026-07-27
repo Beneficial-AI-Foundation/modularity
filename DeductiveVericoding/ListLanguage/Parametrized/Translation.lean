@@ -37,9 +37,9 @@ def toList' {rep : Tpe → Type} : {Γ : Ctx} → {t : Tpe} → Trm Γ t → Env
   | _, _, .snd e, ρ => .snd (toList' e ρ)
   | _, _, .lam body, ρ => .lam (fun x => toList' body (x, ρ))
   | _, _, .app f a, ρ => .app (toList' f ρ) (toList' a ρ)
-  | _, _, .listRec base step, ρ => ListLanguage.Trm'.listRec
-    (.lam fun _ => toList' base ρ)
-    (.lam fun a => .lam fun l => .lam fun res => toList' step (a, (l, (res, ρ))))
+  -- TODO: the new nested-pair `listRec` needs a redesigned translation (see git history /
+  -- the `t`-parameter threading). Stubbed until we work out the proper strategy.
+  | _, _, .listRec _base _step, _ρ => sorry
   | _, _, .true, _ => .true
   | _, _, .false, _ => .false
   | _, _, .le e1 e2, env => .le (toList' e1 env) (toList' e2 env)
@@ -76,18 +76,6 @@ theorem parTrans_eval : {Γ : Ctx} → (ρ : Env Tpe.denote Γ) → (i : Nat) �
     simp [Env.getT, h, parTrans, default_eval]
   | _ :: _, (_, ρ), i + 1, t => parTrans_eval ρ i t
 
-/-- The old-language `listRec` (curried step `head → tail → rec`) evaluates as `listFold`. -/
-theorem old_listRec_eval
-    (ob : ListLanguage.Trm' Tpe.denote (.arrow .unit .list))
-    (os : ListLanguage.Trm' Tpe.denote (.arrow .nat (.arrow .list (.arrow .list .list)))) :
-    ∀ xs, (ListLanguage.Trm'.listRec ob os).eval xs
-        = listFold (ob.eval ()) (fun a l res => os.eval a l res) xs
-  | [] => rfl
-  | a :: l => by
-      show os.eval a l ((ListLanguage.Trm'.listRec ob os).eval l)
-         = os.eval a l (listFold (ob.eval ()) (fun a l res => os.eval a l res) l)
-      rw [old_listRec_eval ob os l]
-
 /-- **Semantic agreement**: the translated old-language term evaluates identically to the
     de Bruijn term. This is what lets correctness transfer across the translation. -/
 theorem toList'_eval : ∀ {Γ : Ctx} {t : Tpe} (e : Trm Γ t) (ρ : Env Tpe.denote Γ),
@@ -104,14 +92,8 @@ theorem toList'_eval : ∀ {Γ : Ctx} {t : Tpe} (e : Trm Γ t) (ρ : Env Tpe.den
   | snd e ih => intro ρ; simp only [toList', Trm.eval, Trm'.eval, ih]
   | lam body ih => intro ρ; funext v; simp only [toList', Trm.eval, Trm'.eval]; exact ih (v, ρ)
   | app f a ih_f ih_a => intro ρ; simp only [toList', Trm.eval, Trm'.eval, ih_f, ih_a]
-  | listRec base step ih_base ih_step =>
-      intro ρ
-      funext L
-      induction L with
-      | nil => simp [Trm.eval, Trm'.eval, toList', ih_base, Trm'.eval.go, listFold]
-      | cons a l ih =>
-        simp [Trm.eval, Trm'.eval, toList', ih_base, ih_step, Trm'.eval.go, listFold] at ⊢ ih
-        rw [ih]
+  -- TODO: depends on the redesigned `toList'` listRec translation (currently stubbed above).
+  | listRec base step ih_base ih_step => intro ρ; sorry
   | false => intro env; rfl
   | true => intro env; rfl
   | le e1 e2 ih1 ih2 => intro env; simp only [toList', Trm.eval, Trm'.eval, ih1, ih2]

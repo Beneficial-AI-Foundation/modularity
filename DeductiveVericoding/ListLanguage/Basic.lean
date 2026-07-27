@@ -97,8 +97,8 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
   | lam : {t u : Tpe} → (rep t → Trm' rep u) → Trm' rep (.arrow t u)
   | app : {t u : Tpe} → Trm' rep (.arrow t u) → Trm' rep t → Trm' rep u
   | listRec {t : Tpe} : Trm' rep (.arrow t .list) →
-   Trm' rep (.arrow (.pair .nat (.pair .list (.pair .list t))) .list) →
-   Trm' rep (.arrow (.pair .list t) .list)
+   Trm' rep (.arrow (.pair t (.pair .nat (.pair .list .list))) .list) →
+   Trm' rep (.arrow (.pair t .list) .list)
   -- Boolean operations
   | true : Trm' rep .bool
   | false : Trm' rep .bool
@@ -198,12 +198,13 @@ def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
   | _, .app f arg => f.eval arg.eval
   | _, .listRec base step => by
       intro p
-      let baseVal := base.eval p.2
+      obtain ⟨par, l⟩ := p
+      let baseVal := base.eval par
       let stepVal := step.eval
       let rec go : List Nat → List Nat
         | [] => baseVal
-        | a :: tl => stepVal (a, (tl, (go tl, p.2)))
-      exact go p.1
+        | a :: tl => stepVal (par, (a, (tl, go tl)))
+      exact go l
   | _, .true => Bool.true
   | _, .false => Bool.false
   | _, .le e1 e2 => Nat.ble e1.eval e2.eval
@@ -232,6 +233,6 @@ structure Impl (inTpe outTpe : Tpe)
   /-- The term implementing the function -/
   code : Trm (.arrow inTpe outTpe)
   /-- Correctness: precondition implies postcondition after evaluation -/
-  correct : ∀ inp, Pre inp →  Post inp (code.eval inp)
+  correct : ∀ inp, Pre inp → Post inp (code.eval inp)
 
 end ListLanguage

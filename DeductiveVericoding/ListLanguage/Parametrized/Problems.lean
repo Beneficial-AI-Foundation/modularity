@@ -41,7 +41,7 @@ def ReverseSolution : ReverseProblem := by
   · apply NilPTactic
   · simp
     pushpreP
-    apply AppPTactic [Tpe.nat, Tpe.list, Tpe.list] .list .list _ (fun env l out => out = l.append [env.getT 0 Tpe.nat])
+    apply AppPTactic .list .list _ (fun env l out => out = l.append [env.getT 0 Tpe.nat])
     · apply ParPTactic
     listRecP
     · apply ConsPTactic

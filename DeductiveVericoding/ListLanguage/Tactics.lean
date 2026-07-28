@@ -44,6 +44,18 @@ def SndTactic {s t u : Tpe} {Pre : s.denote → Prop} (target : s.denote → t.d
       exact impl.correct inp pre
   }
 
+def PairTactic {s t u : Tpe} {Pre : s.denote → Prop} (target1 : s.denote → t.denote) (target2 : s.denote → u.denote)
+  (impl1 : Impl s t Pre (fun inp out => out = target1 inp))
+  (impl2 : Impl s u Pre (fun inp out => out = target2 inp)) :
+    Impl s (.pair t u) Pre (fun inp out => out = (target1 inp, target2 inp)) :=
+  { code := .lam fun k => .mkPair (.app impl1.code (.var k)) (.app impl2.code (.var k))
+    correct inp pre := by
+      simp [Trm.eval, Trm'.eval]
+      congr
+      · exact impl1.correct inp pre
+      exact impl2.correct inp pre
+  }
+
 def ConsTactic {t : Tpe} {Pre : t.denote → Prop}
   (target1 : t.denote → Nat) (target2 : t.denote → List Nat)
   (impl1 : Impl t .nat Pre (fun inp out => out = target1 inp))

@@ -1,5 +1,7 @@
 import DeductiveVericoding.ListLanguage.Basic
+import DeductiveVericoding.ListLanguage.VericodeRuleSet
 import Lean
+import Aesop
 
 /- # TACTICS : Here we have a collection of vericoding tactics-/
 
@@ -231,6 +233,35 @@ elab "pushpre" : tactic => do
         exact phpost))
   setGoals (implGoals.toList ++ restGoals)
 
+/-! # THE `vericode` TACTIC
+
+`vericode` is a backtracking tree search over the vericoding combinators, implemented on top
+of aesop's `VericodeL` rule set — the non-parametrized analogue of `vericodeP`.
+
+The value-producing combinators (`ConsTactic`, `ListRecTactic`, `NumTactic`, …) recover their
+higher-order arguments — the `target`s and the `Post` invariant — by ordinary congruence
+during `apply`, so they need no custom front-ends (à la `introP`/`listRecP`): they are plain
+`apply` rules. They run at **`default` transparency** so that a postcondition presented as a
+*match* (from an anonymous-constructor lambda `fun ⟨x, xs⟩ out => …`) reduces via structure-eta
+and the `target` metavariables get solved.
+
+Two things get special handling:
+* **projections.** `FstTactic`/`SndTactic` each leave the *discarded* component's type as a
+  metavariable, resolved only by a later `IdentityTactic`; aesop reconstructs the proof across
+  that shared metavariable and fills it with `sorry`. So projection goals are closed instead by
+  `projClose`, a front-end that builds the *entire* `.fst`/`.snd`/`.var` term at once — a fully
+  concrete term with no metavariables for aesop to mishandle.
+* **`pushpre`** is an elaborator, wrapped as a `tactic` rule.
+
+Rule phases:
+* **goal closers are `safe`** (`NilTactic`, `UnitTactic`, `TrueTactic`, `FalseTactic`,
+  `NumTactic`, and `projClose`): each fully closes a goal, so committing is never a mistake.
+* **recursion (`ListRecTactic`, `ListRecTactic'`) is `unsafe 90%`** — preferred, backtrackable.
+* **`ConsTactic` is `unsafe 70%`**.
+* **`pushpre` is `unsafe 95%` `tactic`**: aesop's norm phase runs `simp` first, exposing the
+  `Pre → Post` shape it consumes (mirroring the manual `simp; pushpre` idiom). On non-step
+  goals it just fails and the search moves on. -/
+
 /-- If `e` is a chain of product projections of `root`, return the projections outermost-first
     (`true = .1`, `false = .2`); `some []` if `e` is `root` itself; `none` otherwise. -/
 partial def projPath (root e : Expr) : Option (List Bool) :=
@@ -264,6 +295,34 @@ elab "projClose" : tactic => do
   for p in path.reverse do
     proj ← if p then `(term| .fst $proj) else `(term| .snd $proj)
   evalTactic (← `(tactic| exact { code := .lam fun k => $proj, correct := fun _ _ => rfl }))
+
+attribute [aesop safe apply (transparency := default) (rule_sets := [VericodeL])]
+  NilTactic UnitTactic TrueTactic FalseTactic NumTactic
+
+@[aesop safe tactic (rule_sets := [VericodeL])]
+def projCloseRule : TacticM Unit := do evalTactic (← `(tactic| projClose))
+
+attribute [aesop unsafe 90% apply (transparency := default) (rule_sets := [VericodeL])]
+  ListRecTactic ListRecTactic'
+
+attribute [aesop unsafe 70% apply (transparency := default) (rule_sets := [VericodeL])]
+  ConsTactic
+
+@[aesop unsafe 95% tactic (rule_sets := [VericodeL])]
+def pushpreRule : TacticM Unit := do evalTactic (← `(tactic| pushpre))
+
+/-! ## Applying a helper function to a sub-list
+
+`Reverse` (and any `out = F[sublist]` goal) is closed by *applying a helper function to a
+sub-list of the input*, the non-parametrized counterpart of the parametrized `appListP`:
+
+* `appList` (a `RuleTac`) spots each list-valued projection `c` of the input inside the
+  right-hand side and applies `AppTactic`, leaving `base := out = c` (closed by `projClose`)
+  and a helper spec `step := ∀ x, f x = rhs[c ↦ x]`.
+* `introTac` introduces the helper's argument, pairing it onto the input, so the helper spec
+  becomes an ordinary `.list` goal `Impl (.pair I .list) .list (fun _ => True) …` — which
+  `ListRecTactic` then folds. Because `AppTactic`'s helper is unconditional, this inner goal
+  is precondition-free, exactly what `ListRecTactic` needs. -/
 
 /-- Front-end for `IntroTactic` (cf. `introP`): reconstruct the residual pair-condition
     `PairPost` from a goal `Impl I (.arrow s t) Pre (fun inp f => ∀ x, body)` where `f` occurs
@@ -304,3 +363,82 @@ elab "introTac" : tactic => do
           throwError "introTac: `f` occurs other than as `f x`, or the argument escapes"
         mkLambdaFVars #[p, out] ib
   liftMetaTactic fun g => g.apply (mkAppN (mkConst ``IntroTactic) #[I, s, t, Pre, pairPost])
+
+@[aesop unsafe 40% tactic (rule_sets := [VericodeL])]
+def introTacRule : TacticM Unit := do evalTactic (← `(tactic| introTac))
+
+/-- Collect every list-valued projection of `inp` occurring as a subterm of `e`. These are the
+    candidate sub-lists a helper (built by `listRec`) can be applied to. -/
+partial def collectListProjs (inp listNat e : Expr) : MetaM (Array Expr) := do
+  let mut acc : Array Expr := #[]
+  if (projPath inp e).isSome then
+    if ← isDefEq (← inferType e) listNat then acc := acc.push e
+  let children : Array Expr := match e with
+    | .app f a         => #[f, a]
+    | .lam _ d b _     => #[d, b]
+    | .forallE _ d b _ => #[d, b]
+    | .letE _ ty v b _ => #[ty, v, b]
+    | .mdata _ b       => #[b]
+    | .proj _ _ b      => #[b]
+    | _                => #[]
+  for c in children do
+    acc := acc ++ (← collectListProjs inp listNat c)
+  return acc
+
+open Aesop in
+/-- `appList`: on a goal `Impl I .list Pre (fun inp out => out = rhs)`, for each list-valued
+    projection `c` of the input occurring properly inside `rhs`, apply `AppTactic` with
+    `arg := fun inp => c` and `Cond := fun inp x out => out = rhs[c ↦ x]`. One backtrackable
+    alternative per candidate (modelled on the parametrized `appListP`). -/
+def appList : Aesop.RuleTac := fun input => input.goal.withContext do
+  let tgt ← whnf (← input.goal.getType)
+  unless tgt.isAppOf ``Impl do throwError "appList: goal is not `Impl`"
+  let #[I, O, Pre, goalCond] := tgt.getAppArgs | throwError "appList: malformed `Impl` goal"
+  unless (← whnf O).isConstOf ``Tpe.list do throwError "appList: goal type is not `.list`"
+  let listNat ← mkAppM ``List #[mkConst ``Nat]
+  let es ← lambdaTelescope goalCond fun bs body => do
+    unless bs.size == 2 do throwError "appList: unexpected condition shape"
+    let inp := bs[0]!
+    let out := bs[1]!
+    let body ← whnf body
+    unless body.isAppOfArity ``Eq 3 && body.getAppArgs[1]! == out do
+      throwError "appList: condition is not `out = rhs`"
+    let rhs := body.getAppArgs[2]!
+    let raw ← collectListProjs inp listNat rhs
+    let cands := raw.foldl (init := (#[] : Array Expr))
+      fun acc c => if acc.any (· == c) || c == rhs then acc else acc.push c
+    if cands.isEmpty then throwError "appList: no proper list-projection candidates"
+    let listTpe := mkConst ``Tpe.list
+    cands.mapM fun c => do
+      let arg ← mkLambdaFVars #[inp] c
+      withLocalDeclD `x listNat fun x => do
+        let rhs' := rhs.replace fun e => if e == c then some x else none
+        let cond ← mkLambdaFVars #[inp, x, out] (← mkEq out rhs')
+        pure <| mkAppN (mkConst ``AppTactic) #[I, listTpe, listTpe, Pre, arg, cond]
+  let initialState ← saveState
+  let mut rapps : Array RuleApplication := #[]
+  for e in es do
+    try
+      let gs ← input.goal.apply e
+      let postState ← saveState
+      let subgoals ← gs.toArray.mapM (mvarIdToSubgoal input.goal ·)
+      rapps := rapps.push
+        { goals := subgoals, postState, scriptSteps? := none, successProbability? := none }
+    catch _ => pure ()
+    finally restoreState initialState
+  if rapps.isEmpty then throwError "appList: no candidate applied"
+  return { applications := rapps }
+
+attribute [aesop unsafe 20% (rule_sets := [VericodeL]) tactic] appList
+
+/-- Search for a vericoding derivation by backtracking over the `VericodeL` rule set.
+
+`vericode [f, g, …]` additionally hands `f`, `g`, … to aesop as **norm-simp** lemmas (as in
+`simp [f, g]`), to expose problem-specific definitions the combinators would not otherwise
+see through. -/
+syntax "vericode" (" [" ident,* "]")? : tactic
+macro_rules
+  | `(tactic| vericode)         => `(tactic| aesop (rule_sets := [VericodeL]))
+  | `(tactic| vericode [$ls,*]) => do
+      let rules ← ls.getElems.mapM fun l => `(Aesop.rule_expr| norm simp $l:ident)
+      `(tactic| aesop (rule_sets := [VericodeL]) (add $rules,*))

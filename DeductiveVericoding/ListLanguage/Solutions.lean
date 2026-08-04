@@ -210,3 +210,22 @@ def ConcatSolution' : ConcatProblem := by
   apply IdentityTactic
 
 #eval ListLanguage.Trm.pretty ReverseSolution'.code
+
+/-! # `vericode` smoke tests
+
+The same problems, solved automatically by the `vericode` search over the `VericodeL` rule
+set — no manual guidance. `ReverseSolution''` in particular exercises the full pipeline:
+`listRec` → `pushpre` → `appList` (apply an append helper to the recursive result) → `introTac`
+→ nested `listRec`. -/
+
+def UnitSolution'' : UnitProblem := by vericode
+def NilSolution'' : NilProblem := by vericode
+def ConsSolution'' : ConsProblem := by vericode
+def NumToListSolution'' : NumToListProblem := by vericode
+def List123Solution'' : List123Problem := by vericode
+def AppendConstantSolution'' : AppendConstantProblem := by vericode
+def AppendSolution'' : AppendProblem := by vericode
+def ReverseSolution'' : ReverseProblem := by vericode
+def ConcatSolution'' : ConcatProblem := by vericode
+
+#eval ListLanguage.Trm.pretty ReverseSolution''.code

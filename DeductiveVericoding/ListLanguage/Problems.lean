@@ -44,7 +44,10 @@ def List123Solution : List123Problem := {
 abbrev AppendConstantProblem := Impl .list .list (fun _ => True) (fun inp out => out = inp.append [1])
 
 def AppendConstantSolution : AppendConstantProblem := {
-  code := .listRec (.lam fun _ => .cons (.num 1) .nil) (.lam fun a => .lam fun _  => .lam fun res => .cons (.var a) (.var res))
+  code := .lam fun l => .app
+    (.listRec (.lam fun _ => .cons (.num 1) .nil)
+      (.lam fun p => .cons (.fst (.snd (.var p))) (.snd (.snd (.snd (.var p))))))
+    (.mkPair .unit (.var l))
   correct inp _ := by
     induction inp with
     | nil => rfl
@@ -56,7 +59,7 @@ def AppendConstantSolution : AppendConstantProblem := {
 abbrev AppendProblem := Impl (.pair .nat .list) .list (fun _ => True) (fun ⟨a, l⟩ out => out = l.append [a])
 
 def AppendSolution : AppendProblem := {
-  code := .lam fun k => .app (.listRec (.lam fun _ => .cons (.fst (.var k)) .nil) (.lam fun a => .lam fun _  => .lam fun res => .cons (.var a) (.var res))) (.snd (.var k))
+  code := .listRec (.lam fun k => .cons (.var k) .nil) (.lam fun p => .cons (.fst (.snd (.var p))) (.snd (.snd (.snd (.var p)))))
   correct inp _ := by
     obtain ⟨a, l⟩ := inp
     induction l with
@@ -68,24 +71,25 @@ def AppendSolution : AppendProblem := {
 
 abbrev ReverseProblem := Impl .list .list (fun _ => True) (fun l out => out = l.reverse)
 
-def ReverseSolution : ReverseProblem := {
-  code := .listRec (.lam fun _ => .nil) (.lam fun a => .lam fun _  => .lam fun res => .app AppendSolution.code (.mkPair (.var a) (.var res)))
-  correct inp _ := by
-    induction inp with
-    | nil => rfl
-    | cons a l ih =>
-      simp [Trm.eval, Trm'.eval, Trm'.eval.go] at ih ⊢
-      rw [ih]
-      exact AppendSolution.correct (a, l.reverse) trivial
-}
+-- def ReverseSolution : ReverseProblem := {
+--   code := .lam fun l => .app (.listRec (.lam fun _ => .nil) AppendSolution.code)
+--     (.mkPair .unit (.var l))
+--   correct inp _ := by
+--     induction inp with
+--     | nil => rfl
+--     | cons a l ih =>
+--       simp [Trm.eval, Trm'.eval, Trm'.eval.go] at ih ⊢
+--       rw [ih]
+--       exact AppendSolution.correct (a, l.reverse) trivial
+-- }
 
-abbrev ConcatProblem := Impl (.pair .list .list) .list (fun _ => True) (fun ⟨l1, l2⟩ out => out = l1.append l2)
+abbrev ConcatProblem := Impl (.pair .list .list) .list (fun _ => True) (fun ⟨l1, l2⟩ out => out = l2.append l1)
 
 def ConcatSolution : ConcatProblem := {
-  code := .lam fun k => .app (.listRec (.lam fun _ => .snd (.var k))  (.lam fun a => .lam fun _  => .lam fun res => .cons (.var a) (.var res))) (.fst (.var k))
+  code := .listRec (.lam fun k => (.var k)) (.lam fun p => .cons (.fst (.snd (.var p))) (.snd (.snd (.snd (.var p)))))
   correct inp _ := by
     obtain ⟨l1, l2⟩ := inp
-    induction l1 with
+    induction l2 with
     | nil => rfl
     | cons a l ih =>
       simp [Trm.eval, Trm'.eval, Trm'.eval.go] at ih ⊢

@@ -1,8 +1,10 @@
 import DeductiveVericoding.ListLanguage.Basic
+import Lean
 
 /- # TACTICS : Here we have a collection of vericoding tactics-/
 
 open ListLanguage
+open Lean Elab Tactic Meta
 
 def NilTactic {t : Tpe} {Pre : t.denote → Prop} : Impl t .list Pre (fun _ out => out = []) :=
   { code := .lam fun _ => .nil, correct _ _ := rfl}
@@ -144,3 +146,161 @@ def RelaxTactic (I O : Tpe) (Pre : I.denote → Prop) (Post Post' : I.denote →
     Impl I O Pre Post :=
   { code := impl.code
     correct := fun inp hpre => h inp hpre _ (impl.correct inp hpre) }
+
+/-- Decode an input `Tpe` built from right-nested `.pair`s into its leaf components,
+    e.g. `pair a (pair b c) ↦ #[a, b, c]`. Matches how anonymous-constructor patterns
+    `fun (x, y, z) => …` destructure a nested product. -/
+partial def decodeInputTpe (I : Expr) : Array Expr :=
+  if I.isAppOfArity ``Tpe.pair 2 then
+    #[I.getAppArgs[0]!] ++ decodeInputTpe I.getAppArgs[1]!
+  else #[I]
+
+/-- Build a right-nested tuple `⟨x₀, x₁, …⟩` from component values. -/
+partial def mkNestedTuple (xs : Array Expr) : MetaM Expr := do
+  if xs.size ≤ 1 then
+    pure xs[0]!
+  else
+    let rest ← mkNestedTuple (xs.extract 1 xs.size)
+    mkAppM ``Prod.mk #[xs[0]!, rest]
+
+/-- `pushpre` closes the "precondition is an equality" shape that a `listRec` step goal takes
+    after `simp`:
+```
+Impl I O (fun inp => x = s) (fun inp out => … s …)
+```
+where the precondition `Pre inp` reduces to an equality `x = s` (typically `x` is the
+recursive result and `s` the term it stands for), and `s` also occurs in the postcondition.
+`pushpre` rewrites the postcondition by replacing every occurrence of `s` with `x`, i.e.
+relaxes to `Post' := fun inp out => (… s …)[s ↦ x]`, and applies `RelaxTactic`, discharging
+the side goal `∀ inp, Pre inp → ∀ out, Post' inp out → Post inp out` automatically. Only the
+implementation subgoal `Impl I O Pre Post'` remains. -/
+elab "pushpre" : tactic => do
+  let goals ← getGoals
+  if goals.isEmpty then throwError "pushpre: no goals"
+  let goal := goals.head!
+  let restGoals := goals.tail!
+  let tgt ← instantiateMVars (← whnf (← goal.getType))
+  unless tgt.isAppOf ``Impl do
+    throwError "pushpre: goal is not `Impl I O Pre Post`:{indentExpr tgt}"
+  let #[I, O, Pre, Post] := tgt.getAppArgs
+    | throwError "pushpre: malformed `Impl` goal:{indentExpr tgt}"
+  let comps := decodeInputTpe I
+  let m := comps.size
+  let denote (t : Expr) : Expr := mkApp (mkConst ``Tpe.denote) t
+  let decls := comps.map fun t => (`c, fun (_ : Array Expr) => pure (denote t))
+  -- Build the relaxed postcondition `Post'` by reducing the pattern matches on a fresh
+  -- constructor tuple, then re-expressing everything via projections of a packed input.
+  let post' ← withLocalDeclsD decls fun cs => do
+    let tuple ← mkNestedTuple cs
+    let preBody ← whnf (mkApp Pre tuple)
+    unless preBody.isAppOfArity ``Eq 3 do
+      throwError "pushpre: precondition does not reduce to an equality `x = s`:{indentExpr preBody}"
+    let x := preBody.getAppArgs[1]!
+    let s := preBody.getAppArgs[2]!
+    withLocalDeclD `out (denote O) fun out => do
+      let postBody ← whnf (mkAppN Post #[tuple, out])
+      unless (postBody.find? (· == s)).isSome do
+        throwError "pushpre: the precondition's RHS does not occur in the postcondition"
+      let newBody := postBody.replace fun e => if e == s then some x else none
+      withLocalDeclD `inp (denote I) fun inp => do
+        let mut projs := #[]
+        let mut acc := inp
+        for i in [0:m] do
+          if i + 1 == m then
+            projs := projs.push acc
+          else
+            projs := projs.push (← mkAppM ``Prod.fst #[acc])
+            acc ← mkAppM ``Prod.snd #[acc]
+        let newBody' := newBody.replaceFVars cs projs
+        mkLambdaFVars #[inp, out] newBody'
+  let e := mkAppN (mkConst ``RelaxTactic) #[I, O, Pre, Post, post']
+  let gs ← goal.apply e
+  let mut implGoals := #[]
+  for g in gs do
+    if ← g.withContext do return (← whnf (← g.getType)).isAppOf ``Impl then
+      implGoals := implGoals.push g
+    else
+      -- discharge `∀ inp, Pre inp → ∀ out, Post' inp out → Post inp out`
+      setGoals [g]
+      let ids ← (Array.range m).mapM fun i =>
+        `(rcasesPat| $(mkIdent (Name.mkSimple s!"y{i}")):ident)
+      evalTactic (← `(tactic|
+        intro pinp phpre pout phpost <;>
+        obtain ⟨$ids,*⟩ := pinp <;>
+        rw [phpre] at phpost <;>
+        exact phpost))
+  setGoals (implGoals.toList ++ restGoals)
+
+/-- If `e` is a chain of product projections of `root`, return the projections outermost-first
+    (`true = .1`, `false = .2`); `some []` if `e` is `root` itself; `none` otherwise. -/
+partial def projPath (root e : Expr) : Option (List Bool) :=
+  if e == root then some []
+  else if e.isAppOfArity ``Prod.fst 3 then (projPath root e.appArg!).map (true :: ·)
+  else if e.isAppOfArity ``Prod.snd 3 then (projPath root e.appArg!).map (false :: ·)
+  else match e with
+    | .proj ``Prod 0 inner => (projPath root inner).map (true :: ·)
+    | .proj ``Prod 1 inner => (projPath root inner).map (false :: ·)
+    | _ => none
+
+/-- Close a goal `Impl s O Pre (fun inp out => out = π inp)`, where `π` is a (possibly empty)
+    chain of product projections of the input, by building the whole `.fst`/`.snd`/`.var`
+    implementation term in one shot and closing with `rfl`. Fails on any other goal. -/
+elab "projClose" : tactic => do
+  let goal ← getMainGoal
+  let tgt ← instantiateMVars (← whnf (← goal.getType))
+  unless tgt.isAppOf ``Impl do throwError "projClose: not an `Impl` goal"
+  let #[_s, _O, _Pre, goalCond] := tgt.getAppArgs
+    | throwError "projClose: malformed `Impl` goal"
+  let path ← lambdaTelescope goalCond fun bs body => do
+    unless bs.size == 2 do throwError "projClose: condition is not `fun inp out => …`"
+    let out := bs[1]!
+    let body ← whnf body
+    unless body.isAppOfArity ``Eq 3 && body.getAppArgs[1]! == out do
+      throwError "projClose: condition is not `out = …`"
+    match projPath bs[0]! body.getAppArgs[2]! with
+    | some p => pure p
+    | none => throwError "projClose: RHS is not a projection of the input"
+  let mut proj ← `(term| .var k)
+  for p in path.reverse do
+    proj ← if p then `(term| .fst $proj) else `(term| .snd $proj)
+  evalTactic (← `(tactic| exact { code := .lam fun k => $proj, correct := fun _ _ => rfl }))
+
+/-- Front-end for `IntroTactic` (cf. `introP`): reconstruct the residual pair-condition
+    `PairPost` from a goal `Impl I (.arrow s t) Pre (fun inp f => ∀ x, body)` where `f` occurs
+    only as `f x`, and apply `IntroTactic`, leaving the single paired-input subgoal. -/
+elab "introTac" : tactic => do
+  let goal ← getMainGoal
+  let tgt ← instantiateMVars (← whnf (← goal.getType))
+  unless tgt.isAppOf ``Impl do throwError "introTac: goal is not `Impl`:{indentExpr tgt}"
+  let #[I, T, Pre, goalCond] := tgt.getAppArgs
+    | throwError "introTac: malformed `Impl` goal"
+  let Tw ← whnf T
+  unless Tw.isAppOf ``Tpe.arrow do
+    throwError "introTac: goal type is not an arrow:{indentExpr Tw}"
+  let #[s, t] := Tw.getAppArgs
+    | throwError "introTac: malformed arrow type"
+  let pairPost ← lambdaTelescope goalCond fun bs body => do
+    unless bs.size == 2 do throwError "introTac: condition is not `fun inp f => …`"
+    let inp := bs[0]!
+    let f := bs[1]!
+    let body ← whnf body
+    unless body.isForall do
+      throwError "introTac: condition body must start with `∀ x, …`:{indentExpr body}"
+    forallBoundedTelescope body (some 1) fun xs ib => do
+      let x := xs[0]!
+      let fx := mkApp f x
+      let pairTy ← mkAppM ``Prod #[mkApp (mkConst ``Tpe.denote) I, mkApp (mkConst ``Tpe.denote) s]
+      let outTy := mkApp (mkConst ``Tpe.denote) t
+      withLocalDeclD `p pairTy fun p => do
+      withLocalDeclD `out outTy fun out => do
+        let p1 ← mkAppM ``Prod.fst #[p]
+        let p2 ← mkAppM ``Prod.snd #[p]
+        let ib := ib.replace fun e =>
+          if e == fx then some out
+          else if e == inp then some p1
+          else if e == x then some p2
+          else none
+        if ib.containsFVar inp.fvarId! || ib.containsFVar x.fvarId! || ib.containsFVar f.fvarId! then
+          throwError "introTac: `f` occurs other than as `f x`, or the argument escapes"
+        mkLambdaFVars #[p, out] ib
+  liftMetaTactic fun g => g.apply (mkAppN (mkConst ``IntroTactic) #[I, s, t, Pre, pairPost])

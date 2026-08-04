@@ -21,4 +21,5 @@ abbrev InsertionSortProblem := ImplP [] (.arrow .list .list) (fun _ f => ∀ l, 
 def InsertionSortSolution : InsertionSortProblem := by
   vericodeP [insertVal, sorted]
 
-#eval Trm.pretty (toClosed InsertionSortSolution.code)
+-- Disabled: `toClosed` depends on the stubbed `sorry` in `toList'` (listRec case).
+-- #eval Trm.pretty (toClosed InsertionSortSolution.code)

@@ -8,6 +8,8 @@ import Aesop
 open ListLanguage
 open Lean Elab Tactic Meta
 
+/- The following are tactics for immediately closing the goal-/
+
 def NilTactic {t : Tpe} {Pre : t.denote → Prop} : Impl t .list Pre (fun _ out => out = []) :=
   { code := .lam fun _ => .nil, correct _ _ := rfl}
 
@@ -25,6 +27,8 @@ def NumTactic {t : Tpe} {Pre : t.denote → Prop} (n : Nat) : Impl t .nat Pre (f
 
 def IdentityTactic {t : Tpe} {Pre : t.denote → Prop} : Impl t t Pre (fun inp out => out = inp) :=
   { code := .lam fun k => .var k, correct _ _ := rfl}
+
+/- The following are tactics stripping a function application -/
 
 def FstTactic {s t u : Tpe} {Pre : s.denote → Prop} (target : s.denote → t.denote × u.denote)
   (impl : Impl s (.pair t u) Pre (fun inp out => out = target inp)) :
@@ -71,7 +75,9 @@ def ConsTactic {t : Tpe} {Pre : t.denote → Prop}
       exact impl2.correct inp pre
   }
 
---maybe this is not needed
+/- The following are tactics that make some kind of choice, their application is less straightforward -/
+
+/- Build `Impl s u` by chaining `Impl s t` and `Impl t u`, maybe this can be scrapped later.  -/
 def SplitTactic (s t u : Tpe) {Pre : s.denote → Prop} (target : s.denote → t.denote) (Post : t.denote → u.denote → Prop)
   (base : Impl s t Pre (fun inp out => out = target inp))
   (step : Impl t u (fun _ => True) Post) :

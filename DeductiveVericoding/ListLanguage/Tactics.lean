@@ -75,7 +75,49 @@ def ConsTactic {t : Tpe} {Pre : t.denote → Prop}
       exact impl2.correct inp pre
   }
 
+def LETactic {t : Tpe} {Pre : t.denote → Prop}
+  (target1 : t.denote → Nat) (target2 : t.denote → Nat)
+  (impl1 : Impl t .nat Pre (fun inp out => out = target1 inp))
+  (impl2 : Impl t .nat Pre (fun inp out => out = target2 inp)) :
+    Impl t .bool Pre (fun inp out => out = Nat.ble (target1 inp) (target2 inp)) :=
+  { code := .lam fun k => .le (.app impl1.code (.var k)) (.app impl2.code (.var k))
+    correct inp pre := by
+      simp [Trm.eval, Trm'.eval]
+      congr
+      · exact impl1.correct inp pre
+      exact impl2.correct inp pre
+  }
+
 /- The following are tactics that make some kind of choice, their application is less straightforward -/
+
+/- Split the goal into two cases, similar to by_cases in Lean -/
+def CasesTactic {s t : Tpe} {Pre : s.denote → Prop} {Post : s.denote → t.denote → Prop} (cond : s.denote → Bool)
+  (implCond : Impl s .bool Pre (fun inp out => out = cond inp))
+  (implThen : Impl s t (fun inp => Pre inp ∧ cond inp) Post)
+  (implElse : Impl s t (fun inp => Pre inp ∧ ¬ cond inp) Post) :
+    Impl s t Pre (fun inp out => Post inp out) :=
+  {
+    code := .lam fun k => .ite (.app implCond.code (.var k)) (.app implThen.code (.var k)) (.app implElse.code (.var k))
+    correct inp pre := by
+      have hc : implCond.code.eval inp = cond inp := implCond.correct inp pre
+      by_cases hcond : cond inp
+      · simp [Trm.eval, Trm'.eval, hc, hcond]
+        exact implThen.correct inp ⟨pre, hcond⟩
+      simp [Trm.eval, Trm'.eval, hc, hcond]
+      exact implElse.correct inp ⟨pre, hcond⟩
+  }
+
+/- This Tactic picks a specific implementation that satisfies the Post Condition and leaves a proof obligation-/
+def UseTactic {s t : Tpe} {Pre : s.denote → Prop} {Post : s.denote → t.denote → Prop}
+  (target : s.denote → t.denote)
+  (impl : Impl s t Pre (fun inp out => out = target inp))
+  (h : ∀ inp, Pre inp → Post inp (target inp)) :
+    Impl s t Pre Post :=
+  { code := impl.code
+    correct inp pre := by
+      have : impl.code.eval inp = target inp := impl.correct inp pre
+      simp [Trm.eval, this, h inp pre]
+  }
 
 /- Build `Impl s u` by chaining `Impl s t` and `Impl t u`, maybe this can be scrapped  -/
 def SplitTactic (s t u : Tpe) {Pre : s.denote → Prop} (target : s.denote → t.denote) (Post : t.denote → u.denote → Prop)
@@ -89,16 +131,16 @@ def SplitTactic (s t u : Tpe) {Pre : s.denote → Prop} (target : s.denote → t
       exact step.correct (target inp) (by trivial)
   }
 
-def ListRecTactic {t : Tpe} {Post : t.denote × List Nat → List Nat → Prop}
-  (base : Impl t .list (fun _ ↦ True) (fun p out ↦ Post (p, []) out))
-  (step : Impl (.pair t (.pair .nat (.pair .list .list))) .list (fun (p, (_, (l, res))) ↦ Post (p, l) res) (fun (p, (a, (l, _))) out ↦ Post (p, (a :: l)) out)) :
-    Impl (.pair t .list) .list (fun _ ↦ True) Post :=
+def ListRecTactic {t : Tpe} {Pre : t.denote × List Nat → Prop} (hpre : ∀ p, ∀ a, ∀ l, Pre (p, a :: l) → Pre (p, l)) {Post : t.denote × List Nat → List Nat → Prop}
+  (base : Impl t .list (fun inp ↦ Pre (inp, [])) (fun p out ↦ Post (p, []) out))
+  (step : Impl (.pair t (.pair .nat (.pair .list .list))) .list (fun (p, (a, (l, res))) ↦ Pre (p, a :: l) ∧  Post (p, l) res) (fun (p, (a, (l, _))) out ↦ Post (p, (a :: l)) out)) :
+    Impl (.pair t .list) .list Pre Post :=
   { code := .listRec base.code step.code
-    correct inp _ := by
+    correct inp pre := by
       obtain ⟨par, l⟩ := inp
       induction l with
-      | nil => exact base.correct par (by trivial)
-      | cons a l ih => exact step.correct ⟨par, ⟨a, ⟨l, _⟩⟩⟩ ih
+      | nil => exact base.correct par pre
+      | cons a l ih => exact step.correct ⟨par, ⟨a, ⟨l, _⟩⟩⟩ ⟨pre, (ih (hpre _ _ _ pre))⟩
   }
 
 --version without the parameter t
@@ -145,7 +187,7 @@ def IntroTactic (I s t : Tpe) (Pre : I.denote → Prop) (PairPost : (I.denote ×
 /-- Relax the postcondition to a globally-stronger one `Post'` (which may exploit the
     precondition `Pre`). The implementation is reused verbatim; only the specification is
     weakened. -/
-def RelaxPostTactic (I O : Tpe) (Pre : I.denote → Prop) (Post Post' : I.denote → O.denote → Prop)
+def RelaxPostTactic {I O : Tpe} {Pre : I.denote → Prop} (Post Post' : I.denote → O.denote → Prop)
     (impl : Impl I O Pre Post')
     (h : ∀ inp, Pre inp → ∀ out, Post' inp out → Post inp out) :
     Impl I O Pre Post :=

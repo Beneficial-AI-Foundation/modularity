@@ -147,6 +147,7 @@ def AppendConstantSolution' : AppendConstantProblem := by
 def AppendSolution' : AppendProblem := by
   apply ListRecTactic
   · simp
+  · simp
     apply ConsTactic
     · apply IdentityTactic
     apply NilTactic
@@ -180,6 +181,7 @@ def ReverseSolution' : ReverseProblem := by
     apply IdentityTactic
   simp
   apply ListRecTactic
+  · simp
   · apply ConsTactic
     · apply FstTactic
       apply IdentityTactic
@@ -197,6 +199,7 @@ def ReverseSolution' : ReverseProblem := by
 
 def ConcatSolution' : ConcatProblem := by
   apply ListRecTactic
+  · simp
   · apply IdentityTactic
   simp
   pushpre

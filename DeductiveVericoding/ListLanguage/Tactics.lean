@@ -77,7 +77,7 @@ def ConsTactic {t : Tpe} {Pre : t.denote → Prop}
 
 /- The following are tactics that make some kind of choice, their application is less straightforward -/
 
-/- Build `Impl s u` by chaining `Impl s t` and `Impl t u`, maybe this can be scrapped later.  -/
+/- Build `Impl s u` by chaining `Impl s t` and `Impl t u`, maybe this can be scrapped  -/
 def SplitTactic (s t u : Tpe) {Pre : s.denote → Prop} (target : s.denote → t.denote) (Post : t.denote → u.denote → Prop)
   (base : Impl s t Pre (fun inp out => out = target inp))
   (step : Impl t u (fun _ => True) Post) :
@@ -115,26 +115,23 @@ def ListRecTactic' {Post : List Nat → List Nat → Prop}
   }
 
 /-- **Applied helper.** Build `Impl I t Pre (fun inp out => Cond inp (arg inp) out)` by
-    applying a helper function `step : I → (s → t)` to the argument `arg inp`. This is the
-    non-parametrized analogue of the parametrized `AppPTactic`: the helper is unconditional
-    (`fun _ => True`), so the recursion that builds it (via `IntroTactic`/`ListRecTactic`) is
-    free of the ambient precondition. -/
+    applying a helper function `step : I → (s → t)` to the argument `arg inp. -/
 def AppTactic (I s t : Tpe) (Pre : I.denote → Prop) (arg : I.denote → s.denote)
     (Cond : I.denote → s.denote → t.denote → Prop)
-    (base : Impl I s Pre (fun inp out => out = arg inp))
-    (step : Impl I (.arrow s t) (fun _ => True) (fun inp f => ∀ x, Cond inp x (f x))) :
+    (argImpl : Impl I s Pre (fun inp out => out = arg inp))
+    (fnImpl : Impl I (.arrow s t) (fun _ => True) (fun inp f => ∀ x, Cond inp x (f x))) :
     Impl I t Pre (fun inp out => Cond inp (arg inp) out) :=
-  { code := .lam fun k => .app (.app step.code (.var k)) (.app base.code (.var k))
+  { code := .lam fun k => .app (.app fnImpl.code (.var k)) (.app argImpl.code (.var k))
     correct inp pre := by
-      have hb : base.code.eval inp = arg inp := base.correct inp pre
-      show Cond inp (arg inp) (step.code.eval inp (base.code.eval inp))
+      have hb : argImpl.code.eval inp = arg inp := argImpl.correct inp pre
+      show Cond inp (arg inp) (fnImpl.code.eval inp (argImpl.code.eval inp))
       rw [hb]
-      exact step.correct inp trivial (arg inp)
+      exact fnImpl.correct inp trivial (arg inp)
   }
 
 /-- **Introduce the argument of a helper.** Turn a solved `Impl (.pair I s) t` (with the new
     argument paired onto the input) into an arrow-valued `Impl I (.arrow s t)`. The dual of
-    `AppTactic`; the non-parametrized analogue of the parametrized `IntroPTactic`. -/
+    `AppTactic`. -/
 def IntroTactic (I s t : Tpe) (Pre : I.denote → Prop) (PairPost : (I.denote × s.denote) → t.denote → Prop)
     (impl : Impl (.pair I s) t (fun p => Pre p.1) PairPost) :
     Impl I (.arrow s t) Pre (fun inp f => ∀ x, PairPost (inp, x) (f x)) :=
@@ -147,8 +144,8 @@ def IntroTactic (I s t : Tpe) (Pre : I.denote → Prop) (PairPost : (I.denote ×
 
 /-- Relax the postcondition to a globally-stronger one `Post'` (which may exploit the
     precondition `Pre`). The implementation is reused verbatim; only the specification is
-    weakened. This is the non-parametrized analogue of `RelaxCondPTactic`. -/
-def RelaxTactic (I O : Tpe) (Pre : I.denote → Prop) (Post Post' : I.denote → O.denote → Prop)
+    weakened. -/
+def RelaxPostTactic (I O : Tpe) (Pre : I.denote → Prop) (Post Post' : I.denote → O.denote → Prop)
     (impl : Impl I O Pre Post')
     (h : ∀ inp, Pre inp → ∀ out, Post' inp out → Post inp out) :
     Impl I O Pre Post :=
@@ -179,7 +176,7 @@ Impl I O (fun inp => x = s) (fun inp out => … s …)
 where the precondition `Pre inp` reduces to an equality `x = s` (typically `x` is the
 recursive result and `s` the term it stands for), and `s` also occurs in the postcondition.
 `pushpre` rewrites the postcondition by replacing every occurrence of `s` with `x`, i.e.
-relaxes to `Post' := fun inp out => (… s …)[s ↦ x]`, and applies `RelaxTactic`, discharging
+relaxes to `Post' := fun inp out => (… s …)[s ↦ x]`, and applies `RelaxPostTactic`, discharging
 the side goal `∀ inp, Pre inp → ∀ out, Post' inp out → Post inp out` automatically. Only the
 implementation subgoal `Impl I O Pre Post'` remains. -/
 elab "pushpre" : tactic => do
@@ -221,7 +218,7 @@ elab "pushpre" : tactic => do
             acc ← mkAppM ``Prod.snd #[acc]
         let newBody' := newBody.replaceFVars cs projs
         mkLambdaFVars #[inp, out] newBody'
-  let e := mkAppN (mkConst ``RelaxTactic) #[I, O, Pre, Post, post']
+  let e := mkAppN (mkConst ``RelaxPostTactic) #[I, O, Pre, Post, post']
   let gs ← goal.apply e
   let mut implGoals := #[]
   for g in gs do
@@ -242,7 +239,7 @@ elab "pushpre" : tactic => do
 /-! # THE `vericode` TACTIC
 
 `vericode` is a backtracking tree search over the vericoding combinators, implemented on top
-of aesop's `VericodeL` rule set — the non-parametrized analogue of `vericodeP`.
+of aesop's `VericodeL` rule set`.
 
 The value-producing combinators (`ConsTactic`, `ListRecTactic`, `NumTactic`, …) recover their
 higher-order arguments — the `target`s and the `Post` invariant — by ordinary congruence
@@ -320,7 +317,7 @@ def pushpreRule : TacticM Unit := do evalTactic (← `(tactic| pushpre))
 /-! ## Applying a helper function to a sub-list
 
 `Reverse` (and any `out = F[sublist]` goal) is closed by *applying a helper function to a
-sub-list of the input*, the non-parametrized counterpart of the parametrized `appListP`:
+sub-list of the input*:
 
 * `appList` (a `RuleTac`) spots each list-valued projection `c` of the input inside the
   right-hand side and applies `AppTactic`, leaving `base := out = c` (closed by `projClose`)
@@ -395,7 +392,7 @@ open Aesop in
 /-- `appList`: on a goal `Impl I .list Pre (fun inp out => out = rhs)`, for each list-valued
     projection `c` of the input occurring properly inside `rhs`, apply `AppTactic` with
     `arg := fun inp => c` and `Cond := fun inp x out => out = rhs[c ↦ x]`. One backtrackable
-    alternative per candidate (modelled on the parametrized `appListP`). -/
+    alternative per candidate. -/
 def appList : Aesop.RuleTac := fun input => input.goal.withContext do
   let tgt ← whnf (← input.goal.getType)
   unless tgt.isAppOf ``Impl do throwError "appList: goal is not `Impl`"

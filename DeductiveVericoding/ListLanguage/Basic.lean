@@ -96,9 +96,9 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
   | snd : {t u : Tpe} → Trm' rep (.pair t u) → Trm' rep u
   | lam : {t u : Tpe} → (rep t → Trm' rep u) → Trm' rep (.arrow t u)
   | app : {t u : Tpe} → Trm' rep (.arrow t u) → Trm' rep t → Trm' rep u
-  | listRec {t : Tpe} : Trm' rep (.arrow t .list) →
-   Trm' rep (.arrow (.pair t (.pair .nat (.pair .list .list))) .list) →
-   Trm' rep (.arrow (.pair t .list) .list)
+  | listRec {t s : Tpe} : Trm' rep (.arrow t s) →
+   Trm' rep (.arrow (.pair t (.pair s (.pair .nat .list))) s) →
+   Trm' rep (.arrow (.pair t .list) s)
   -- Boolean operations
   | true : Trm' rep .bool
   | false : Trm' rep .bool
@@ -197,13 +197,14 @@ def Trm'.eval : {t : Tpe} → Trm' Tpe.denote t → t.denote
   | _, .lam f => fun v => (f v).eval  -- Lean handles binding
   | _, .app f arg => f.eval arg.eval
   | _, .listRec base step => by
+      expose_names
       intro p
       obtain ⟨par, l⟩ := p
       let baseVal := base.eval par
       let stepVal := step.eval
-      let rec go : List Nat → List Nat
+      let rec go : List Nat → s.denote
         | [] => baseVal
-        | a :: tl => stepVal (par, (a, (tl, go tl)))
+        | a :: tl => stepVal (par, (go tl, (a, tl)))
       exact go l
   | _, .true => Bool.true
   | _, .false => Bool.false

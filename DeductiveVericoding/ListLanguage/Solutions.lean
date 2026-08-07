@@ -39,7 +39,7 @@ def List123Solution : List123Problem := {
 def AppendConstantSolution : AppendConstantProblem := {
   code := .lam fun l => .app
     (.listRec (.lam fun _ => .cons (.num 1) .nil)
-      (.lam fun p => .cons (.fst (.snd (.var p))) (.snd (.snd (.snd (.var p))))))
+      (.lam fun p => .cons (.fst (.snd (.snd (.var p)))) (.fst (.snd (.var p)))))
     (.mkPair .unit (.var l))
   correct inp _ := by
     induction inp with
@@ -50,7 +50,7 @@ def AppendConstantSolution : AppendConstantProblem := {
 }
 
 def AppendSolution : AppendProblem := {
-  code := .listRec (.lam fun k => .cons (.var k) .nil) (.lam fun p => .cons (.fst (.snd (.var p))) (.snd (.snd (.snd (.var p)))))
+  code := .listRec (.lam fun k => .cons (.var k) .nil) (.lam fun p => .cons (.fst (.snd (.snd (.var p)))) (.fst (.snd (.var p))))
   correct inp _ := by
     obtain ⟨a, l⟩ := inp
     induction l with
@@ -73,7 +73,7 @@ def AppendSolution : AppendProblem := {
 -- }
 
 def ConcatSolution : ConcatProblem := {
-  code := .listRec (.lam fun k => (.var k)) (.lam fun p => .cons (.fst (.snd (.var p))) (.snd (.snd (.snd (.var p)))))
+  code := .listRec (.lam fun k => (.var k)) (.lam fun p => .cons (.fst (.snd (.snd (.var p)))) (.fst (.snd (.var p))))
   correct inp _ := by
     obtain ⟨l1, l2⟩ := inp
     induction l2 with
@@ -137,9 +137,9 @@ def AppendConstantSolution' : AppendConstantProblem := by
   pushpre
   apply ConsTactic
   · apply FstTactic
+    apply SndTactic
     apply IdentityTactic
-  apply SndTactic
-  apply SndTactic
+  apply FstTactic
   apply IdentityTactic
 
 #eval ListLanguage.Trm.pretty AppendConstantSolution'.code
@@ -156,9 +156,9 @@ def AppendSolution' : AppendProblem := by
   apply ConsTactic
   · apply FstTactic
     apply SndTactic
+    apply SndTactic
     apply IdentityTactic
-  apply SndTactic
-  apply SndTactic
+  apply FstTactic
   apply SndTactic
   apply IdentityTactic
 
@@ -167,33 +167,29 @@ def ReverseSolution' : ReverseProblem := by
   · apply NilTactic
   simp
   pushpre
-  apply SplitTactic (.pair .nat (.pair .list .list)) (.pair (.pair .nat .list) .list) .list
-   (fun inp => ((inp.1,inp.2.1), inp.2.2)) (fun inp out => out = inp.2.append [inp.1.1])
+  apply SplitTactic (.pair .list (.pair .nat .list)) (.pair .nat .list) .list
+   (fun inp => (inp.2.1, inp.1)) (fun inp out => out = inp.2.append [inp.1])
   · apply PairTactic
-    · apply PairTactic
-      · apply FstTactic
-        apply IdentityTactic
-      apply FstTactic
+    · apply FstTactic
       apply SndTactic
       apply IdentityTactic
-    apply SndTactic
-    apply SndTactic
+    apply FstTactic
     apply IdentityTactic
   simp
+  apply RelaxPreTactic (fun _ => True) (fun _ _ => by trivial)
   apply ListRecTactic
   · simp
   · apply ConsTactic
-    · apply FstTactic
-      apply IdentityTactic
+    · apply IdentityTactic
     apply NilTactic
   simp
   pushpre
   apply ConsTactic
   · apply FstTactic
     apply SndTactic
+    apply SndTactic
     apply IdentityTactic
-  apply SndTactic
-  apply SndTactic
+  apply FstTactic
   apply SndTactic
   apply IdentityTactic
 
@@ -206,9 +202,9 @@ def ConcatSolution' : ConcatProblem := by
   apply ConsTactic
   · apply FstTactic
     apply SndTactic
+    apply SndTactic
     apply IdentityTactic
-  apply SndTactic
-  apply SndTactic
+  apply FstTactic
   apply SndTactic
   apply IdentityTactic
 

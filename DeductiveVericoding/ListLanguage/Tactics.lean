@@ -131,29 +131,29 @@ def SplitTactic (s t u : Tpe) {Pre : s.denote → Prop} (target : s.denote → t
       exact step.correct (target inp) ⟨inp, pre, rfl⟩
   }
 
-def ListRecTactic {t : Tpe} {Pre : t.denote × List Nat → Prop} (hpre : ∀ p, ∀ a, ∀ l, Pre (p, a :: l) → Pre (p, l)) {Post : t.denote × List Nat → List Nat → Prop}
-  (base : Impl t .list (fun inp ↦ Pre (inp, [])) (fun p out ↦ Post (p, []) out))
-  (step : Impl (.pair t (.pair .nat (.pair .list .list))) .list (fun (p, (a, (l, res))) ↦ Pre (p, a :: l) ∧  Post (p, l) res) (fun (p, (a, (l, _))) out ↦ Post (p, (a :: l)) out)) :
-    Impl (.pair t .list) .list Pre Post :=
+def ListRecTactic {t s : Tpe} {Pre : t.denote × List Nat → Prop} (hpre : ∀ p, ∀ a, ∀ l, Pre (p, a :: l) → Pre (p, l)) {Post : t.denote × List Nat → s.denote → Prop}
+  (base : Impl t s (fun inp ↦ Pre (inp, [])) (fun p out ↦ Post (p, []) out))
+  (step : Impl (.pair t (.pair s (.pair .nat .list))) s (fun (p, (res, (a, tl))) ↦ Pre (p, a :: tl) ∧  Post (p, tl) res) (fun (p, (_, (a, tl))) out ↦ Post (p, (a :: tl)) out)) :
+    Impl (.pair t .list) s Pre Post :=
   { code := .listRec base.code step.code
     correct inp pre := by
       obtain ⟨par, l⟩ := inp
       induction l with
       | nil => exact base.correct par pre
-      | cons a l ih => exact step.correct ⟨par, ⟨a, ⟨l, _⟩⟩⟩ ⟨pre, (ih (hpre _ _ _ pre))⟩
+      | cons a tl ih => exact step.correct ⟨par, ⟨_, ⟨a, tl⟩⟩⟩ ⟨pre, (ih (hpre _ _ _ pre))⟩
   }
 
 --version without the parameter t
-def ListRecTactic' {Post : List Nat → List Nat → Prop}
-  (base : Impl .unit .list (fun _ ↦ True) (fun _ out ↦ Post [] out))
-  (step : Impl (.pair .nat (.pair .list .list)) .list (fun (_, (l, res)) ↦ Post l res) (fun (a, (l, _)) out ↦ Post (a :: l) out)) :
-    Impl .list .list (fun _ ↦ True) Post :=
+def ListRecTactic' {s : Tpe} {Post : List Nat → s.denote → Prop}
+  (base : Impl .unit s (fun _ ↦ True) (fun _ out ↦ Post [] out))
+  (step : Impl (.pair s (.pair .nat .list)) s (fun (res, (_, tl)) ↦ Post tl res) (fun (_, (a, tl)) out ↦ Post (a :: tl) out)) :
+    Impl .list s (fun _ ↦ True) Post :=
   {
     code := .lam fun k => .app (.listRec base.code (.lam fun l => .app step.code (.snd (.var l)))) (.mkPair .unit (.var k))
     correct inp _ := by
       induction inp with
       | nil => exact base.correct _ (by trivial)
-      | cons a l ih => exact step.correct ⟨a, ⟨l, _⟩⟩ ih
+      | cons a l ih => exact step.correct ⟨_, ⟨a, l⟩⟩ ih
   }
 
 /-- **Applied helper.** Build `Impl I t Pre (fun inp out => Cond inp (arg inp) out)` by
@@ -195,8 +195,8 @@ def RelaxPostTactic {I O : Tpe} {Pre : I.denote → Prop} (Post Post' : I.denote
     correct := fun inp hpre => h inp hpre _ (impl.correct inp hpre) }
 
 def RelaxPreTactic {I O : Tpe} {Pre : I.denote → Prop} {Post : I.denote → O.denote → Prop} (Pre' : I.denote → Prop)
-    (impl : Impl I O Pre' Post)
-    (h : ∀ inp, Pre inp → Pre' inp) :
+    (h : ∀ inp, Pre inp → Pre' inp)
+    (impl : Impl I O Pre' Post) :
     Impl I O Pre Post :=
   { code := impl.code
     correct := fun inp hpre => impl.correct inp (h inp hpre) }

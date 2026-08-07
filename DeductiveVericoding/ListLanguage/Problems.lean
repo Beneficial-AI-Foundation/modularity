@@ -26,3 +26,5 @@ abbrev AppendProblem := Impl (.pair .nat .list) .list (fun _ => True) (fun ⟨a,
 abbrev ReverseProblem := Impl .list .list (fun _ => True) (fun l out => out = l.reverse)
 
 abbrev ConcatProblem := Impl (.pair .list .list) .list (fun _ => True) (fun ⟨l1, l2⟩ out => out = l2.append l1)
+
+abbrev IsEmptyProblem := Impl .list .bool (fun _ => True) (fun inp out => out = inp.isEmpty)

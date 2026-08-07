@@ -83,6 +83,12 @@ def ConcatSolution : ConcatProblem := {
       rw [ih]
 }
 
+def IsEmptySolution : IsEmptyProblem := {
+  code := .lam fun l => .app (.listRec (.lam fun k => .true) (.lam fun p => .false)) (.mkPair .unit (.var l))
+  correct inp _ := by
+    obtain ⟨_, _⟩ := inp <;> simp [Trm'.eval, Trm.eval, Trm'.eval.go]
+}
+
 /-! # Derivations via the vericoding combinators
 
 The same problems, solved by `apply`ing the combinators of `Tactics.lean` rather than writing
@@ -208,6 +214,13 @@ def ConcatSolution' : ConcatProblem := by
   apply SndTactic
   apply IdentityTactic
 
+def IsEmptySolution' : IsEmptyProblem := by
+  apply ListRecTactic'
+  · simp
+    apply TrueTactic
+  simp
+  apply FalseTactic
+
 #eval ListLanguage.Trm.pretty ReverseSolution'.code
 
 /-! # `vericode` smoke tests
@@ -226,5 +239,6 @@ def AppendConstantSolution'' : AppendConstantProblem := by vericode
 def AppendSolution'' : AppendProblem := by vericode
 def ReverseSolution'' : ReverseProblem := by vericode
 def ConcatSolution'' : ConcatProblem := by vericode
+def IsEmptySolution'' : IsEmptyProblem := by vericode
 
 #eval ListLanguage.Trm.pretty ReverseSolution''.code

@@ -122,13 +122,13 @@ def UseTactic {s t : Tpe} {Pre : s.denote → Prop} {Post : s.denote → t.denot
 /- Build `Impl s u` by chaining `Impl s t` and `Impl t u`, maybe this can be scrapped  -/
 def SplitTactic (s t u : Tpe) {Pre : s.denote → Prop} (target : s.denote → t.denote) (Post : t.denote → u.denote → Prop)
   (base : Impl s t Pre (fun inp out => out = target inp))
-  (step : Impl t u (fun _ => True) Post) :
+  (step : Impl t u (fun inp => ∃ s, Pre s ∧ inp = target s) Post) :
     Impl s u Pre (fun inp out => Post (target inp) out) :=
   { code := .lam fun k => .app step.code (.app base.code (.var k))
     correct inp pre := by
       have : base.code.eval inp = target inp := base.correct inp pre
       simp [Trm.eval, Trm'.eval, this]
-      exact step.correct (target inp) (by trivial)
+      exact step.correct (target inp) ⟨inp, pre, rfl⟩
   }
 
 def ListRecTactic {t : Tpe} {Pre : t.denote × List Nat → Prop} (hpre : ∀ p, ∀ a, ∀ l, Pre (p, a :: l) → Pre (p, l)) {Post : t.denote × List Nat → List Nat → Prop}
@@ -193,6 +193,13 @@ def RelaxPostTactic {I O : Tpe} {Pre : I.denote → Prop} (Post Post' : I.denote
     Impl I O Pre Post :=
   { code := impl.code
     correct := fun inp hpre => h inp hpre _ (impl.correct inp hpre) }
+
+def RelaxPreTactic {I O : Tpe} {Pre : I.denote → Prop} {Post : I.denote → O.denote → Prop} (Pre' : I.denote → Prop)
+    (impl : Impl I O Pre' Post)
+    (h : ∀ inp, Pre inp → Pre' inp) :
+    Impl I O Pre Post :=
+  { code := impl.code
+    correct := fun inp hpre => impl.correct inp (h inp hpre) }
 
 /-- Decode an input `Tpe` built from right-nested `.pair`s into its leaf components,
     e.g. `pair a (pair b c) ↦ #[a, b, c]`. Matches how anonymous-constructor patterns

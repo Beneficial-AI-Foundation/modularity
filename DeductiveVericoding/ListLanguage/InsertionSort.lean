@@ -109,14 +109,18 @@ def InsertionSortSolution : InsertionSortProblem := by
     · apply NilTactic
     simp [Sorted, Ordered]
   refine RelaxPostTactic _ (fun (a, l, res) out => Sorted (a :: res) out) ?_ ?_
-  · sorry
-    -- refine SplitTactic (.pair .nat (.pair .list .list)) (.pair .nat .list) .list (fun (a, l, res) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
-    -- · sorry
-    -- simp
-    -- refine UseTactic (fun (a, l, res) => InsertionSolution.code.eval (a, res)) ?_ ?_
-    -- · simp
-    --   refine SplitTactic (.pair .nat (.pair .list .list)) (.pair .nat .list) .list (fun (a, l, res) => (a, res))
-    -- intro (a, l, res) pre
-    -- exact InsertionSolution.correct (a, res) pre.1
+  · refine RelaxPreTactic (fun (a, l, res) => Ordered res) ?_ (fun _ pre => pre.1)
+    refine SplitTactic (.pair .nat (.pair .list .list)) (.pair .nat .list) .list (fun (a, l, res) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
+    · apply PairTactic
+      · apply FstTactic
+        apply IdentityTactic
+      apply SndTactic
+      apply SndTactic
+      apply IdentityTactic
+    refine RelaxPreTactic (fun (a, res) => Ordered res) ?_ ?_
+    · exact InsertionSolution
+    intro (a, res) ⟨s, hs1, hs2⟩
+    have : res = s.2.2 := by grind
+    exact this ▸ hs1
   intro (a, l, res) pre out
   exact (SortedPerm_iff _ _ _ (List.Perm.cons _ pre.2.symm)).mp

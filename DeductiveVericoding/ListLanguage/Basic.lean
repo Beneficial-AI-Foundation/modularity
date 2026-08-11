@@ -97,8 +97,8 @@ inductive Trm' (rep : Tpe → Type) : Tpe → Type where
   | lam : {t u : Tpe} → (rep t → Trm' rep u) → Trm' rep (.arrow t u)
   | app : {t u : Tpe} → Trm' rep (.arrow t u) → Trm' rep t → Trm' rep u
   | listRec {t : Tpe} : Trm' rep (.arrow t .list) →
-   Trm' rep (.arrow (.pair t (.pair .nat (.pair .list .list))) .list) →
-   Trm' rep (.arrow (.pair t .list) .list)
+    Trm' rep (.arrow (.pair t (.pair .nat (.pair .list .list))) .list) →
+    Trm' rep (.arrow (.pair t .list) .list)
   -- Boolean operations
   | true : Trm' rep .bool
   | false : Trm' rep .bool

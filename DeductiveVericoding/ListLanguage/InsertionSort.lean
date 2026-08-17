@@ -152,3 +152,35 @@ def InsertionSortSolution : InsertionSortProblem := by
     exact this ▸ hs1
   intro (a, l, res) pre out
   exact (SortedPerm_iff _ _ _ (List.Perm.cons _ pre.2.symm)).mp
+
+
+-- this is a test for vericode, we would like to automate as much of the human written proof as possible
+def InsertionSolution' : InsertProblem := by
+  apply ListRecTactic
+  · intro _ a l
+    induction l with -- use grind here
+    | nil => simp [Ordered]
+    | cons a l _ => simp [Ordered]
+  · vericode [SingletonSorted_iff]
+  refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.1) (by vericode) ?_ ?_
+  · simp
+    refine UseTactic (fun inp => inp.1 :: inp.2.1 :: inp.2.2.1) (by vericode) ?_
+    intro inp pre
+    change match inp with
+    | (p, a, l, snd) => Sorted (p :: a :: l) (p :: a :: l)
+    simp [SortedSelf_iff, Ordered] --grind here
+    exact ⟨pre.2, pre.1.1⟩
+  simp
+  refine UseTactic (fun inp => inp.2.1 :: inp.2.2.2) (by vericode) ?_
+  intro (p, a, l, res) pre
+  simp_all [Sorted, Ordered_iff_all_ge_head]
+  obtain ⟨⟨⟨hal, hl⟩, hpl⟩, hap⟩ := pre
+  constructor
+  · intro x hx
+    have : x ∈ (p :: l) := by grind
+    simp at this
+    cases this with
+    | inl h => exact h ▸ Nat.le_of_succ_le hap
+    | inr h => exact hal x h
+  apply List.Perm.trans (List.Perm.swap _ _ _)
+  apply List.Perm.cons _ hpl.2

@@ -371,7 +371,7 @@ attribute [aesop unsafe 90% apply (transparency := default) (rule_sets := [Veric
   ListRecTactic ListRecTactic'
 
 attribute [aesop unsafe 70% apply (transparency := default) (rule_sets := [VericodeL])]
-  ConsTactic
+  ConsTactic PairTactic LETactic
 
 @[aesop unsafe 95% tactic (rule_sets := [VericodeL])]
 def pushpreRule : TacticM Unit := do evalTactic (← `(tactic| pushpre))

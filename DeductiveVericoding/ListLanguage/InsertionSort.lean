@@ -42,6 +42,30 @@ theorem Ordered_iff_all_ge_head (a : Nat) (l : List Nat) : Ordered (a :: l) ↔
     intro hbl hab c hc
     exact le_trans hab <| ((ih b).mp hbl).1 c hc
 
+lemma SortedOrdered_iff (l1 l2 : List Nat) (h : Ordered l1) : Sorted l1 l2 ↔ l2 = l1 := by
+  refine ⟨fun h2 => ?_, fun h2 => by simp [Sorted, h2, h]⟩
+  induction l1 generalizing l2 with
+  | nil => simp_all only [Sorted, List.nil_perm]
+  | cons a l1 ih =>
+    induction l2 with
+    | nil => simp_all only [Sorted, List.perm_nil, reduceCtorEq]
+    | cons b l2 _ =>
+      have hab : a = b := by
+        apply le_antisymm
+        · have : b = a ∨ b ∈ l1 := by grind [Sorted]
+          obtain this|this := this
+          · rw [this]
+          exact ((Ordered_iff_all_ge_head a l1).mp h).1 b this
+        have : a = b ∨ a ∈ l2 := by grind [Sorted]
+        obtain this|this := this
+        · rw [this]
+        exact ((Ordered_iff_all_ge_head b l2).mp h2.1).1 a this
+      simp_all [Sorted]
+      apply ih
+      · exact ((Ordered_iff_all_ge_head b l1).mp h).2
+      · exact ((Ordered_iff_all_ge_head b l2).mp h2.1).2
+      exact h2.2
+
 /- # InsertionSort Vericoding -/
 
 abbrev InsertionSortProblem := Impl .list .list (fun _ => True) (fun inp out => Sorted inp out)
@@ -51,13 +75,14 @@ abbrev InsertProblem := Impl (.pair .nat .list) .list (fun inp => Ordered inp.2)
 def InsertionSolution : InsertProblem := by
   apply ListRecTactic
   · intro _ a l
-    induction l with
+    induction l with -- use grind here
     | nil => simp [Ordered]
     | cons a l _ => simp [Ordered]
   · simp [SingletonSorted_iff]
     apply ConsTactic
     · apply IdentityTactic
     apply NilTactic
+
   refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.1) ?_ ?_ ?_
   · apply LETactic
     · apply FstTactic
@@ -65,22 +90,25 @@ def InsertionSolution : InsertProblem := by
     apply FstTactic
     apply SndTactic
     apply IdentityTactic
-  simp
-  refine UseTactic (fun inp => inp.1 :: inp.2.1 :: inp.2.2.1) ?_ ?_
-  · apply ConsTactic
-    · apply FstTactic
-      apply IdentityTactic
-    apply ConsTactic
-    · apply FstTactic
+  · simp
+    refine UseTactic (fun inp => inp.1 :: inp.2.1 :: inp.2.2.1) ?_ ?_
+    · apply ConsTactic
+      · apply FstTactic
+        apply IdentityTactic
+      apply ConsTactic
+      · apply FstTactic
+        apply SndTactic
+        apply IdentityTactic
+      apply FstTactic
+      apply SndTactic
       apply SndTactic
       apply IdentityTactic
-    apply FstTactic
-    apply SndTactic
-    apply SndTactic
-    apply IdentityTactic
-  · intro inp pre
-    simp [Sorted, Ordered, pre.2, pre.1.1]
-    exact List.Perm.refl _
+    · intro inp pre
+      change match inp with
+      | (p, a, l, snd) => Sorted (p :: a :: l) (p :: a :: l)
+      simp [SortedSelf_iff, Ordered] --grind here
+      exact ⟨pre.2, pre.1.1⟩
+  simp
   refine UseTactic (fun inp => inp.2.1 :: inp.2.2.2) ?_ ?_
   · apply ConsTactic
     · apply FstTactic

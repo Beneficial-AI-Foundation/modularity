@@ -167,7 +167,7 @@ def ReverseSolution' : ReverseProblem := by
   · apply NilTactic
   simp
   pushpre
-  apply SplitTactic (.pair .nat (.pair .list .list)) (.pair (.pair .nat .list) .list) .list
+  apply SplitTactic' (.pair .nat (.pair .list .list)) (.pair (.pair .nat .list) .list) .list
    (fun inp => ((inp.1,inp.2.1), inp.2.2)) (fun inp out => out = inp.2.append [inp.1.1])
   · apply PairTactic
     · apply PairTactic

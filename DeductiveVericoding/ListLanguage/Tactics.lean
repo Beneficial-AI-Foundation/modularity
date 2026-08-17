@@ -131,7 +131,20 @@ def SplitTactic (s t u : Tpe) {Pre : s.denote → Prop} (target : s.denote → t
       exact step.correct (target inp) ⟨inp, pre, rfl⟩
   }
 
-def ListRecTactic {t : Tpe} {Pre : t.denote × List Nat → Prop} (hpre : ∀ p, ∀ a, ∀ l, Pre (p, a :: l) → Pre (p, l)) {Post : t.denote × List Nat → List Nat → Prop}
+/-  Version of SplitTactic without the precondition on the step case. -/
+def SplitTactic' (s t u : Tpe) {Pre : s.denote → Prop} (target : s.denote → t.denote) (Post : t.denote → u.denote → Prop)
+  (base : Impl s t Pre (fun inp out => out = target inp))
+  (step : Impl t u (fun _ => True) Post) :
+    Impl s u Pre (fun inp out => Post (target inp) out) :=
+  { code := .lam fun k => .app step.code (.app base.code (.var k))
+    correct inp pre := by
+      have : base.code.eval inp = target inp := base.correct inp pre
+      simp [Trm.eval, Trm'.eval, this]
+      exact step.correct (target inp) trivial
+  }
+
+def ListRecTactic {t : Tpe} {Pre : t.denote × List Nat → Prop} {Post : t.denote × List Nat → List Nat → Prop}
+  (hpre : ∀ p, ∀ a, ∀ l, Pre (p, a :: l) → Pre (p, l))
   (base : Impl t .list (fun inp ↦ Pre (inp, [])) (fun p out ↦ Post (p, []) out))
   (step : Impl (.pair t (.pair .nat (.pair .list .list))) .list (fun (p, (a, (l, res))) ↦ Pre (p, a :: l) ∧  Post (p, l) res) (fun (p, (a, (l, _))) out ↦ Post (p, (a :: l)) out)) :
     Impl (.pair t .list) .list Pre Post :=

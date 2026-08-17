@@ -32,6 +32,12 @@ lemma SortedPerm_iff (l1 l2 out : List Nat) (h : l1.Perm l2) : Sorted l1 out ↔
   simp [Sorted]
   exact fun _ => ⟨fun h2 => List.Perm.trans h.symm h2, fun h2 => List.Perm.trans h h2⟩
 
+lemma Sorted_Cons (x : Nat) (l1 l2 l3 : List Nat) (h : l1.Perm l2) : Sorted (x :: l1) l3 ↔ Sorted (x :: l2) l3 :=
+  SortedPerm_iff _ _ _ <| List.Perm.cons x h
+
+lemma Sorted_Swap (x y : Nat) (l1 l2 : List Nat) : Sorted (x :: y :: l1) l2 ↔ Sorted (y :: x :: l1) l2 :=
+  SortedPerm_iff _ _ _ <| List.Perm.swap y x l1
+
 /-- All elements in a sorted list are ≥ its head -/
 theorem Ordered_iff_all_ge_head (a : Nat) (l : List Nat) : Ordered (a :: l) ↔
     (∀ x ∈ l, a ≤ x) ∧ Ordered l := by
@@ -41,6 +47,12 @@ theorem Ordered_iff_all_ge_head (a : Nat) (l : List Nat) : Ordered (a :: l) ↔
     simp [Ordered]
     intro hbl hab c hc
     exact le_trans hab <| ((ih b).mp hbl).1 c hc
+
+/-- If `a` bounds `l1` from below and `l2` is an ordered rearrangement of `l1`, then `a :: l2`
+is ordered. -/
+lemma Ordered_cons_of_perm (a : Nat) (l1 l2 : List Nat) (hp : l1.Perm l2)
+    (h1 : ∀ x ∈ l1, a ≤ x) (h2 : Ordered l2) : Ordered (a :: l2) :=
+  (Ordered_iff_all_ge_head a l2).mpr ⟨fun x hx => h1 x (hp.mem_iff.mpr hx), h2⟩
 
 lemma SortedOrdered_iff (l1 l2 : List Nat) (h : Ordered l1) : Sorted l1 l2 ↔ l2 = l1 := by
   refine ⟨fun h2 => ?_, fun h2 => by simp [Sorted, h2, h]⟩
@@ -130,6 +142,23 @@ def InsertionSolution : InsertProblem := by
     | inr h => exact hal x h
   apply List.Perm.trans (List.Perm.swap _ _ _)
   apply List.Perm.cons _ hpl.2
+
+/-- Same derivation as `InsertionSolution'`, but with every step below the case split left to
+`vericode`: each lemma in the brackets is a search step that may rewrite the postcondition,
+with the precondition available to discharge the lemma's own hypotheses. -/
+def InsertionSolution'' : InsertProblem := by
+  apply ListRecTactic
+  · intro _ a l
+    induction l with
+    | nil => simp [Ordered]
+    | cons a l _ => simp [Ordered]
+  · vericode [SingletonSorted_iff]
+  refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.1) (by vericode) ?_ ?_
+  -- `p ≤ a`: `p :: a :: l` is already ordered, so `Sorted (p :: a :: l) out` *is* `out = p :: a :: l`
+  · vericode [SortedOrdered_iff, Ordered]
+  -- `a < p`: swap, replace `p :: l` by the recursive result `res`, then read off `out = a :: res`
+  vericode [Sorted_Swap, Sorted_Cons, SortedOrdered_iff, Ordered_cons_of_perm,
+    Ordered_iff_all_ge_head]
 
 def InsertionSortSolution : InsertionSortProblem := by
   apply ListRecTactic'

@@ -221,6 +221,14 @@ set — no manual guidance. `ReverseSolution''` in particular exercises the full
 `listRec` → `pushpre` → `appList` (apply an append helper to the recursive result) → `introTac`
 → nested `listRec`. -/
 
+/-- `MaxSpec` under each outcome of the comparison. Handed to `vericode`, these are what turn the
+undecided postcondition into `out = y` resp. `out = x` — *after* the search has decided to branch
+on `x ≤ y`, which it does on its own: the input carries two numbers, so comparing them is one of
+the finitely many steps it tries. -/
+theorem maxSpec_of_le (x y out : Nat) (h : x ≤ y) : MaxSpec out x y ↔ out = y := by simp [MaxSpec, h]
+
+theorem maxSpec_of_gt (x y out : Nat) (h : ¬ x ≤ y) : MaxSpec out x y ↔ out = x := by simp [MaxSpec, h]
+
 def UnitSolution'' : UnitProblem := by vericode
 def NilSolution'' : NilProblem := by vericode
 def ConsSolution'' : ConsProblem := by vericode
@@ -230,5 +238,7 @@ def AppendConstantSolution'' : AppendConstantProblem := by vericode
 def AppendSolution'' : AppendProblem := by vericode
 def ReverseSolution'' : ReverseProblem := by vericode
 def ConcatSolution'' : ConcatProblem := by vericode
+def MaxSolution'' : MaxProblem := by vericode [maxSpec_of_le, maxSpec_of_gt]
 
 #eval ListLanguage.Trm.pretty ReverseSolution''.code
+#eval ListLanguage.Trm.pretty MaxSolution''.code

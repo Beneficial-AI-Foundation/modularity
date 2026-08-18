@@ -160,6 +160,14 @@ def InsertionSolution'' : InsertProblem := by
   vericode [Sorted_Swap, Sorted_Cons, SortedOrdered_iff, Ordered_cons_of_perm,
     Ordered_iff_all_ge_head]
 
+/-- The whole `InsertProblem` in one search: `vericode` picks the list recursion, discharges its
+monotonicity obligation, **invents the comparison to branch on**, and rewrites the postcondition
+with the lemmas in each branch. The lemmas are the only input; no step of the derivation is
+written by hand. -/
+def InsertionSolution''' : InsertProblem := by
+  vericode [SingletonSorted_iff, SortedOrdered_iff, Sorted_Swap, Sorted_Cons,
+    Ordered_cons_of_perm, Ordered_iff_all_ge_head, Ordered]
+
 def InsertionSortSolution : InsertionSortProblem := by
   apply ListRecTactic'
   · refine UseTactic (fun inp => []) ?_ ?_

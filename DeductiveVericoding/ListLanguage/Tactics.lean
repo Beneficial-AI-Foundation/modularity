@@ -328,7 +328,10 @@ Rule phases:
   goals it just fails and the search moves on.
 * **`relaxPost` is `unsafe 50%` `tactic`, one rule per lemma passed to `vericode [f, g, …]`**
   (added at the call site, so it is not part of the rule set). It is the only rule that can use a
-  *specification* fact rather than build code; see the section on it below. -/
+  *specification* fact rather than build code; see the section on it below.
+* **`natCases` is `unsafe 20%`**: the case split. It is the only rule that has to *invent* its
+  argument (the condition), so it offers one alternative per comparison of two `.nat` components
+  of the input and lets the search choose. -/
 
 /-- If `e` is a chain of product projections of `root`, return the projections outermost-first
     (`true = .1`, `false = .2`); `some []` if `e` is `root` itself; `none` otherwise. -/
@@ -593,17 +596,42 @@ def lemmaKind (lem : Expr) : MetaM (Bool × Bool) :=
 
 initialize registerTraceClass `relaxPost
 
+private def withMaxHeartbeatsImp {α : Type} (n : Nat) (x : CoreM α) : CoreM α :=
+  withReader (fun ctx => { ctx with maxHeartbeats := n }) x
+
+/-- Run `x` with its own heartbeat budget (cf. `Core.withCurrHeartbeats`). -/
+def withMaxHeartbeats {α : Type} {m : Type → Type} [Monad m] [MonadControlT CoreM m]
+    (n : Nat) (x : m α) : m α :=
+  controlAt CoreM fun runInBase => withMaxHeartbeatsImp n (runInBase x)
+
+/-- Heartbeat budget for a single side-condition discharge. Discharging is a *search step*, run
+    hundreds of times over a `vericode` invocation, so no single call may run away: without a
+    budget, one pathological `simp_all`/`grind` goal takes the whole build down (it can recurse
+    deeply enough to exhaust the stack, which no `catch` can recover from). -/
+def dischargeHeartbeats : Nat := 5000 * 1000
+
 /-- Run `tac` on `mv`; report whether it closed the goal, restoring the state if it did not. -/
 def tryDischarge (mv : MVarId) (tac : TSyntax `tactic) : TacticM Bool := do
   let s ← saveState
-  try
-    let gs ← Lean.Elab.Tactic.run mv (withoutRecover (evalTactic tac))
-    if gs.isEmpty then return true
-    trace[relaxPost] "discharger left {gs.length} goal(s) open"
-    s.restore; return false
-  catch ex =>
-    trace[relaxPost] "discharger failed: {ex.toMessageData}"
-    s.restore; return false
+  -- The discharger is speculative: whatever it reports — a linter warning, an error it logged
+  -- instead of throwing, a heartbeat timeout — is noise from a search step the user never wrote.
+  -- Keep the message log at its entry value in every outcome.
+  let msgs ← Core.getMessageLog
+  -- `tryCatchRuntimeEx`, not a plain `try`: an ordinary `catch` deliberately re-throws runtime
+  -- exceptions, and running out of the heartbeat budget below *is* one. Here it is not an error
+  -- but the answer "this side condition is not worth more time".
+  tryCatchRuntimeEx
+    (do
+      let gs ← withMaxHeartbeats dischargeHeartbeats <| Core.withCurrHeartbeats <|
+        Lean.Elab.Tactic.run mv (withoutRecover (evalTactic tac))
+      Core.setMessageLog msgs
+      if gs.isEmpty then return true
+      trace[relaxPost] "discharger left {gs.length} goal(s) open"
+      s.restore; return false)
+    (fun ex => do
+      if ex.isInterrupt then throw ex
+      trace[relaxPost] "discharger failed: {ex.toMessageData}"
+      s.restore; Core.setMessageLog msgs; return false)
 
 /-- `relaxPost lem [d₁, …, dₖ]` rewrites the postcondition of a goal
 `Impl I O Pre Post` with the lemma `lem` (an `Eq` or `Iff`), leaving the single goal
@@ -640,21 +668,26 @@ def relaxPostCore (force : Bool) (lemStx : Term)
   let #[I, O, Pre, Post] := tgt.getAppArgs
     | throwError "relaxPost: malformed `Impl` goal:{indentExpr tgt}"
   let m := (decodeInputTpe I).size
-  -- the discharger for the lemma's side conditions
+  -- The discharger for the lemma's side conditions. `grind` gets the whole list; `simp_all` only
+  -- gets the definitions and rewrite rules. A lemma whose conclusion is neither an equation nor a
+  -- definition (say `… → Ordered (a :: l)`) is a *fact* for `grind` to instantiate, but as a simp
+  -- lemma it is a conditional rewrite whose hypotheses contain variables the conclusion does not
+  -- fix — simp then recurses into its own discharger and can blow the stack.
+  let simpDs : Array Ident ← dsArr.filterM fun d => do
+    let c ← realizeGlobalConstNoOverloadWithInfo d
+    return (← getConstInfo c) matches .defnInfo _ || (← lemmaKind (← mkConstWithLevelParams c)).1
   let simpArgs : Array (TSyntax ``Lean.Parser.Tactic.simpLemma) ←
-    dsArr.mapM fun d => `(Lean.Parser.Tactic.simpLemma| $d:term)
+    simpDs.mapM fun d => `(Lean.Parser.Tactic.simpLemma| $d:term)
   let grindArgs : Array (TSyntax ``Lean.Parser.Tactic.grindParam) ←
     dsArr.mapM fun d => `(Lean.Parser.Tactic.grindParam| $d:ident)
+  let simpAll ← if simpArgs.isEmpty then `(tactic| simp_all) else `(tactic| simp_all [$simpArgs,*])
+  let grinding ← if grindArgs.isEmpty then `(tactic| grind) else `(tactic| grind [$grindArgs,*])
   let discharge ←
-    if dsArr.isEmpty then
-      `(tactic| first | assumption | (simp_all; done) | (simp_all <;> grind) | grind)
-    else
-      `(tactic|
-        first
-          | assumption
-          | (simp_all [$simpArgs,*]; done)
-          | (simp_all [$simpArgs,*] <;> grind [$grindArgs,*])
-          | grind [$grindArgs,*])
+    `(tactic| first
+        | assumption
+        | ($simpAll:tactic; done)
+        | ($simpAll:tactic <;> $grinding:tactic)
+        | $grinding:tactic)
   withLocalDeclD `inp (← denoteTy I) fun inp => do
     -- `tuple = (inp.1, inp.2.1, …)`: definitionally `inp` (structure eta), but in constructor
     -- form, so the `match` of an anonymous-constructor lambda reduces against it.
@@ -677,8 +710,10 @@ def relaxPostCore (force : Bool) (lemStx : Term)
           -- `whnfCore`, not `whnf`: reduce the `match`/beta-redex of `Post` without unfolding
           -- the user's definitions, which are the very patterns `lem` matches against.
           let target ← deepReduce (← whnfCore (mkApp2 Post tuple out))
+          -- as in `rw`: elaborate with `mayPostpone` and do *not* force synthetic metavariables —
+          -- a generic lemma's implicit arguments, and hence its instances, are only determined by
+          -- matching it against the postcondition
           let lem ← Term.elabTerm lemStx none true
-          Term.synthesizeSyntheticMVars (postpone := .no)
           let ctxHolder ← mkFreshExprSyntheticOpaqueMVar (mkConst ``True)
           let r ← ctxHolder.mvarId!.rewrite target lem
           if (← instantiateMVars r.eNew) == target then
@@ -746,6 +781,113 @@ elab_rules : tactic
   | `(tactic| relaxPost! $lemStx $[[$ds,*]]?) => relaxPostCore true lemStx ds
   | `(tactic| relaxPost $lemStx $[[$ds,*]]?)  => relaxPostCore false lemStx ds
 
+/-! ## Inventing the case split
+
+Branching is the one construction the search cannot read off the postcondition: `CasesTactic`
+takes the condition `cond` as an argument, and nothing in the goal says what it should be. But in
+this language a condition can only ever be a comparison of two numbers (`Trm'.le` and `Trm'.ite`
+are the only decision primitives), so at a goal whose input carries **two `.nat` components** —
+which is exactly the situation after `ListRecTactic` on an insertion-style problem, where the
+element being inserted and the head of the list are both in scope — there are only finitely many
+conditions to try. `natCases` offers each of them as a backtrackable alternative. -/
+
+/-- The operand pairs of every `≤`/`<` comparison occurring in `e`. -/
+partial def collectComparisons (e : Expr) : Array (Expr × Expr) :=
+  let here : Option (Expr × Expr) :=
+    let args := e.getAppArgs
+    if e.isAppOfArity ``Nat.ble 2 || e.isAppOfArity ``Nat.blt 2 ||
+       e.isAppOfArity ``Nat.le 2 || e.isAppOfArity ``Nat.lt 2 then
+      some (args[0]!, args[1]!)
+    else if e.isAppOfArity ``LE.le 4 || e.isAppOfArity ``LT.lt 4 then
+      some (args[2]!, args[3]!)
+    else none
+  let children : Array Expr := match e with
+    | .app f a         => #[f, a]
+    | .lam _ d b _     => #[d, b]
+    | .forallE _ d b _ => #[d, b]
+    | .letE _ t v b _  => #[t, v, b]
+    | .mdata _ b       => #[b]
+    | .proj _ _ b      => #[b]
+    | _                => #[]
+  let acc := children.foldl (init := (#[] : Array (Expr × Expr)))
+    fun acc c => acc ++ collectComparisons c
+  match here with
+  -- a comparison under a binder (`∀ x ∈ l, a ≤ x`) is about the bound variable, not about the
+  -- input; its operands are loose bound variables, which must never reach `isDefEq`
+  | some (a, b) => if a.hasLooseBVars || b.hasLooseBVars then acc else acc.push (a, b)
+  | none   => acc
+
+/-- Does `e` compare `x` and `y`, in either order? Used to tell whether the precondition already
+    fixes the order of two numbers. The operands are compared up to definitional equality: the
+    same projection of the input may appear with `ℕ` in one place and the unreduced
+    `Tpe.nat.denote` in the other. -/
+def comparesPair (e x y : Expr) : MetaM Bool :=
+  (collectComparisons e).anyM fun (a, b) => withoutModifyingState do
+    return (← isDefEq a x) && (← isDefEq b y) || (← isDefEq a y) && (← isDefEq b x)
+
+open Aesop in
+/-- `natCases`: on a goal `Impl I O Pre Post` whose input has at least two `.nat` components,
+    apply `CasesTactic` with `cond := fun inp => Nat.ble πᵢ πⱼ` for each ordered pair of distinct
+    nat projections. One backtrackable alternative per candidate, each with a *concrete* `cond` —
+    an `apply CasesTactic` with `cond` left as a metavariable would be shared across the three
+    subgoals and reconstructed by aesop as `sorry` (cf. `projClose`).
+
+    A pair whose order the precondition already fixes is skipped: splitting on it would produce
+    one vacuous branch and, since both branches keep the input type, the search would otherwise
+    split on the same two numbers forever. -/
+def natCases : Aesop.RuleTac := fun input => input.goal.withContext do
+  let tgt ← whnf (← input.goal.getType)
+  unless tgt.isAppOf ``Impl do throwError "natCases: goal is not `Impl`"
+  let #[I, O, Pre, Post] := tgt.getAppArgs | throwError "natCases: malformed `Impl` goal"
+  let comps := decodeInputTpe I
+  let m := comps.size
+  let es ← withLocalDeclD `inp (← denoteTy I) fun inp => do
+    let mut projs := #[]
+    let mut acc := inp
+    for i in [0:m] do
+      if i + 1 == m then
+        projs := projs.push acc
+      else
+        projs := projs.push (← mkAppM ``Prod.fst #[acc])
+        acc ← mkAppM ``Prod.snd #[acc]
+    let nats := (Array.range m).filterMap fun i =>
+      if comps[i]!.isConstOf ``Tpe.nat then some projs[i]! else none
+    if nats.size < 2 then throwError "natCases: fewer than two `.nat` components"
+    let tuple ← mkNestedTuple projs
+    -- Nothing to decide once the postcondition names the output outright: the constructive
+    -- combinators build `out = rhs` directly. Skipping those goals is also what stops the rule
+    -- from splitting the boolean condition goal it just created — that goal's postcondition is
+    -- `out = Nat.ble …`, and splitting it reproduces itself forever.
+    withLocalDeclD `out (← denoteTy O) fun out => do
+      let body ← deepReduce (← whnfCore (mkApp2 Post tuple out))
+      if body.isAppOfArity ``Eq 3 && body.getAppArgs[1]! == out then
+        throwError "natCases: the postcondition already determines the output"
+    -- the precondition, phrased in the same projections (see `relaxPostCore` for the tuple trick)
+    let preTy ← deepReduce (← whnfCore (mkApp Pre tuple))
+    let mut cands := #[]
+    for i in [0:nats.size] do
+      for j in [0:nats.size] do
+        if i != j && !(← comparesPair preTy nats[i]! nats[j]!) then
+          let cond ← mkLambdaFVars #[inp] (← mkAppM ``Nat.ble #[nats[i]!, nats[j]!])
+          cands := cands.push (mkAppN (mkConst ``CasesTactic) #[I, O, Pre, Post, cond])
+    if cands.isEmpty then throwError "natCases: the precondition already orders every pair"
+    pure cands
+  let initialState ← saveState
+  let mut rapps : Array RuleApplication := #[]
+  for e in es do
+    try
+      let gs ← input.goal.apply e
+      let postState ← saveState
+      let subgoals ← gs.toArray.mapM (mvarIdToSubgoal input.goal ·)
+      rapps := rapps.push
+        { goals := subgoals, postState, scriptSteps? := none, successProbability? := none }
+    catch _ => pure ()
+    finally restoreState initialState
+  if rapps.isEmpty then throwError "natCases: no candidate applied"
+  return { applications := rapps }
+
+attribute [aesop unsafe 20% (rule_sets := [VericodeL]) tactic] natCases
+
 /-- Search for a vericoding derivation by backtracking over the `VericodeL` rule set.
 
 `vericode [f, g, …]` hands `f`, `g`, … to aesop in two ways:
@@ -774,9 +916,10 @@ elab_rules : tactic
     let mut rules : Array (TSyntax `Aesop.rule_expr) := #[]
     for l in ls.getElems do
       let c ← realizeGlobalConstNoOverloadWithInfo l
+      let isDefn := (← getConstInfo c) matches .defnInfo _
       let (isRw, isPerm) ← lemmaKind (← mkConstWithLevelParams c)
-      unless isRw && isPerm do
-        rules := rules.push (← `(Aesop.rule_expr| norm simp $l:ident))
       if isRw then
         rules := rules.push (← `(Aesop.rule_expr| unsafe 50% tactic (by relaxPost $l:ident [$ls,*])))
+      if isDefn || (isRw && !isPerm) then
+        rules := rules.push (← `(Aesop.rule_expr| norm simp $l:ident))
     evalTactic (← `(tactic| aesop (rule_sets := [VericodeL]) (add $rules,*)))

@@ -328,7 +328,9 @@ Rule phases:
   goals it just fails and the search moves on.
 * **`relaxPost` is `unsafe 50%` `tactic`, one rule per lemma passed to `vericode [f, g, …]`**
   (added at the call site, so it is not part of the rule set). It is the only rule that can use a
-  *specification* fact rather than build code; see the section on it below.
+  *specification* fact rather than build code — either by rewriting the postcondition with an
+  `Eq`/`Iff`, or by applying an implication backwards and keeping what the precondition cannot
+  discharge; see the section on it below.
 * **`natCases` is `unsafe 20%`**: the case split. It is the only rule that has to *invent* its
   argument (the condition), so it offers one alternative per comparison of two `.nat` components
   of the input and lets the search choose. -/
@@ -633,40 +635,42 @@ def tryDischarge (mv : MVarId) (tac : TSyntax `tactic) : TacticM Bool := do
       trace[relaxPost] "discharger failed: {ex.toMessageData}"
       s.restore; Core.setMessageLog msgs; return false)
 
-/-- `relaxPost lem [d₁, …, dₖ]` rewrites the postcondition of a goal
-`Impl I O Pre Post` with the lemma `lem` (an `Eq` or `Iff`), leaving the single goal
-`Impl I O Pre Post'` for the rewritten postcondition. Any hypothesis of `lem` becomes a side
-condition, proved *from the precondition* by `assumption`, `simp_all [d₁, …, dₖ]` and
-`grind [d₁, …, dₖ]`; the whole tactic fails if a side condition survives, so no proof obligation
-is ever silently dropped.
+/-! ### The shared context of a postcondition relaxation
 
-The precondition is made available to that discharger both as-is and split into its conjunctive
-leaves (see `preLeaves`), which is what lets `assumption` instantiate the metavariables a
-rewrite leaves behind: rewriting `Sorted (a :: p :: l) out` with
-`Sorted_Cons : l1.Perm l2 → (Sorted (x :: l1) l3 ↔ Sorted (x :: l2) l3)` yields
-`Sorted (a :: ?l2) out` plus the side condition `(p :: l).Perm ?l2`, and `assumption` picks
-`?l2 := res` out of the precondition.
+Both relaxation paths (`relaxByRewrite`, `relaxByImplication`) start from the same picture of the
+goal: the input as a tuple of projections, the precondition split into usable hypotheses, a fresh
+output variable, and the postcondition applied to the two. `RelaxPostCtx` bundles it, and
+`withRelaxPostCtx` builds it once. -/
 
-A *permutative* lemma (one whose two sides differ only by a permutation of subterms, such as
-`Sorted_Swap`) can always be applied again to undo itself, so a search that uses it never
-terminates. `relaxPost` therefore admits such a lemma in one direction only, fixed by the same
-term order `simp` uses for permutative rules — but in the opposite orientation: `simp` rewrites
-towards the smaller term, so the smaller term is the shape a goal already has, and the step that
-can expose something new is the one towards the larger term. `relaxPost! lem` skips the check,
-for steering a derivation by hand in the direction the order forbids. -/
-syntax (name := relaxPostStx) "relaxPost" ppSpace term:max (" [" ident,* "]")? : tactic
-syntax (name := relaxPostForceStx) "relaxPost!" ppSpace term:max (" [" ident,* "]")? : tactic
+/-- The pieces a relaxation path works with, all living in one extended local context. -/
+structure RelaxPostCtx where
+  /-- The `Impl` goal's input `Tpe`. -/
+  I : Expr
+  /-- The `Impl` goal's output `Tpe`. -/
+  O : Expr
+  /-- The `Impl` goal's precondition. -/
+  Pre : Expr
+  /-- The `Impl` goal's postcondition. -/
+  Post : Expr
+  /-- A fresh variable standing for the input. -/
+  inp : Expr
+  /-- A fresh hypothesis `Pre inp`, phrased in projections of `inp`. -/
+  hpre : Expr
+  /-- The conjunctive leaves of `Pre inp`: their proofs (in terms of `hpre`) and their types. -/
+  leaves : Array (Expr × Expr)
+  /-- One local hypothesis per entry of `leaves`, so that `assumption` can see them. -/
+  leafFVars : Array Expr
+  /-- A fresh variable standing for the output. -/
+  out : Expr
+  /-- `Post inp out`, reduced — the thing a relaxation path has to match against. -/
+  target : Expr
+  /-- Discharges a lemma's own hypotheses from the precondition. -/
+  discharge : TSyntax `tactic
 
-/-- The implementation of `relaxPost`; `force` disables the permutative-direction check. -/
-def relaxPostCore (force : Bool) (lemStx : Term)
-    (ds : Option (Syntax.TSepArray `ident ",")) : TacticM Unit := withMainContext do
-  let dsArr : Array Ident := match ds with | some ds => ds.getElems | none => #[]
-  let goal ← getMainGoal
-  let tgt ← instantiateMVars (← whnf (← goal.getType))
-  unless tgt.isAppOf ``Impl do
-    throwError "relaxPost: goal is not `Impl I O Pre Post`:{indentExpr tgt}"
-  let #[I, O, Pre, Post] := tgt.getAppArgs
-    | throwError "relaxPost: malformed `Impl` goal:{indentExpr tgt}"
+/-- Set up a `RelaxPostCtx` for the goal `Impl I O Pre Post` and run `k` in its local context.
+    `ds` are the extra definitions/lemmas the side-condition discharger may use. -/
+def withRelaxPostCtx (I O Pre Post : Expr) (dsArr : Array Ident)
+    (k : RelaxPostCtx → TacticM Unit) : TacticM Unit := do
   let m := (decodeInputTpe I).size
   -- The discharger for the lemma's side conditions. `grind` gets the whole list; `simp_all` only
   -- gets the definitions and rewrite rules. A lemma whose conclusion is neither an equation nor a
@@ -710,72 +714,224 @@ def relaxPostCore (force : Bool) (lemStx : Term)
           -- `whnfCore`, not `whnf`: reduce the `match`/beta-redex of `Post` without unfolding
           -- the user's definitions, which are the very patterns `lem` matches against.
           let target ← deepReduce (← whnfCore (mkApp2 Post tuple out))
-          -- as in `rw`: elaborate with `mayPostpone` and do *not* force synthetic metavariables —
-          -- a generic lemma's implicit arguments, and hence its instances, are only determined by
-          -- matching it against the postcondition
-          let lem ← Term.elabTerm lemStx none true
-          let ctxHolder ← mkFreshExprSyntheticOpaqueMVar (mkConst ``True)
-          let r ← ctxHolder.mvarId!.rewrite target lem
-          if (← instantiateMVars r.eNew) == target then
-            throwError "relaxPost: the rewrite did not change the postcondition"
-          -- A permutative rewrite (`Sorted (x :: y :: l) o ↔ Sorted (y :: x :: l) o`) can always
-          -- be undone, so an unguarded search oscillates on it forever. Admit it in one fixed
-          -- direction only, using the same term order `simp` uses for permutative rules — but
-          -- in the *opposite* orientation: `simp` rewrites towards the smaller term, so the
-          -- smaller term is the form a goal already has, and the only step that can expose
-          -- anything new is the one towards the larger term.
-          if !force && (← lemmaKind lem).2 then
-            unless ← acLt target (← instantiateMVars r.eNew) do
-              throwError "relaxPost: {lemStx} is permutative and this is its normalising \
-                direction, so applying it here would loop; use `relaxPost!` to force it"
-          -- Discharge the lemma's *proof* obligations; repeat, since closing one may assign
-          -- metavariables occurring in another. Value metavariables (e.g. the `l2` of
-          -- `Sorted_Cons`, which the pattern does not determine) are never attacked directly —
-          -- they are meant to be fixed by unification when a proof obligation is discharged.
-          let mut pending := #[]
-          for mv in r.mvarIds do
-            if ← mv.isAssigned then continue
-            let ty ← instantiateMVars (← mv.getType)
-            if ← isProp ty then
-              pending := pending.push (← mv.replaceTargetDefEq (← deepReduce ty))
-            else
-              pending := pending.push mv
-          let mut progress := true
-          while progress do
-            progress := false
-            let mut next := #[]
-            for mv in pending do
-              if ← mv.isAssigned then continue
-              if ← isProp (← instantiateMVars (← mv.getType)) then
-                if ← tryDischarge mv discharge then progress := true else next := next.push mv
-              else next := next.push mv
-            pending := next
-          let stuck ← pending.filterM fun mv => return !(← mv.isAssigned)
-          unless stuck.isEmpty do
-            let msgs := stuck.map fun mv => m!"\n{MessageData.ofGoal mv}"
-            throwError "relaxPost: could not discharge the side condition(s) of \
-              {lemStx}:{MessageData.joinSep msgs.toList ""}"
-          let eNew ← deepReduce (← instantiateMVars r.eNew)
-          let eqProof ← instantiateMVars r.eqProof
-          if eNew.hasExprMVar || eqProof.hasExprMVar then
-            throwError "relaxPost: the rewrite left metavariables behind:{indentExpr eNew}"
-          if (leafFVars.push hpre).any (eNew.containsFVar ·.fvarId!) then
-            throwError "relaxPost: the rewritten postcondition depends on the \
-              precondition:{indentExpr eNew}"
-          let post' ← mkLambdaFVars #[inp, out] eNew
-          let prf ← withLocalDeclD `hp eNew fun hp => do
-            let bridge := (← mkEqMPR eqProof hp).replaceFVars leafFVars (leaves.map (·.1))
-            mkLambdaFVars #[inp, hpre, out, hp] bridge
-          let gs ← goal.apply (mkAppN (mkConst ``RelaxPostTactic) #[I, O, Pre, Post, post'])
-          let mut implGoals := #[]
-          for g in gs do
-            if ← g.withContext do return (← whnf (← g.getType)).isAppOf ``Impl then
-              implGoals := implGoals.push g
-            else
-              unless ← isDefEq (← g.getType) (← inferType prf) do
-                throwError "relaxPost: the relaxation proof does not fit the side goal"
-              g.assign prf
-          replaceMainGoal implGoals.toList
+          k { I, O, Pre, Post, inp, hpre, leaves, leafFVars, out, target, discharge }
+
+/-- Finish a relaxation: apply `RelaxPostTactic` with the new postcondition `post'`, discharge its
+    side goal `∀ inp, Pre inp → ∀ out, Post' inp out → Post inp out` with `prf`, and leave the
+    single `Impl I O Pre Post'` goal. -/
+def finishRelaxPost (goal : MVarId) (c : RelaxPostCtx) (post' prf : Expr) : TacticM Unit := do
+  let gs ← goal.apply (mkAppN (mkConst ``RelaxPostTactic) #[c.I, c.O, c.Pre, c.Post, post'])
+  let mut implGoals := #[]
+  for g in gs do
+    if ← g.withContext do return (← whnf (← g.getType)).isAppOf ``Impl then
+      implGoals := implGoals.push g
+    else
+      unless ← isDefEq (← g.getType) (← inferType prf) do
+        throwError "relaxPost: the relaxation proof does not fit the side goal"
+      g.assign prf
+  replaceMainGoal implGoals.toList
+
+/-- Run the fixpoint discharge loop on `pending`, returning the metavariables that survive it.
+    Repeated, since closing one obligation may assign metavariables occurring in another. Value
+    metavariables (e.g. the `l2` of `Sorted_Cons`, which the pattern does not determine) are never
+    attacked directly — they are meant to be fixed by unification when a proof obligation is
+    discharged. -/
+def dischargeObligations (c : RelaxPostCtx) (pending : Array MVarId) : TacticM (Array MVarId) := do
+  let mut pending := pending
+  let mut progress := true
+  while progress do
+    progress := false
+    let mut next := #[]
+    for mv in pending do
+      if ← mv.isAssigned then continue
+      if ← isProp (← instantiateMVars (← mv.getType)) then
+        if ← tryDischarge mv c.discharge then progress := true else next := next.push mv
+      else next := next.push mv
+    pending := next
+  pending.filterM fun mv => return !(← mv.isAssigned)
+
+/-! ### Path 1: relaxation by rewriting
+
+`lem` is an `Eq`/`Iff`; rewrite `Post` with it. The new postcondition is *equivalent* to the old
+one under the precondition. -/
+
+/-- Relax the postcondition by rewriting it with the `Eq`/`Iff` lemma `lem`. -/
+def relaxByRewrite (force : Bool) (goal : MVarId) (lemStx : Term) (c : RelaxPostCtx) :
+    TacticM Unit := do
+  -- as in `rw`: elaborate with `mayPostpone` and do *not* force synthetic metavariables —
+  -- a generic lemma's implicit arguments, and hence its instances, are only determined by
+  -- matching it against the postcondition
+  let lem ← Term.elabTerm lemStx none true
+  let ctxHolder ← mkFreshExprSyntheticOpaqueMVar (mkConst ``True)
+  let r ← ctxHolder.mvarId!.rewrite c.target lem
+  if (← instantiateMVars r.eNew) == c.target then
+    throwError "relaxPost: the rewrite did not change the postcondition"
+  -- A permutative rewrite (`Sorted (x :: y :: l) o ↔ Sorted (y :: x :: l) o`) can always
+  -- be undone, so an unguarded search oscillates on it forever. Admit it in one fixed
+  -- direction only, using the same term order `simp` uses for permutative rules — but
+  -- in the *opposite* orientation: `simp` rewrites towards the smaller term, so the
+  -- smaller term is the form a goal already has, and the only step that can expose
+  -- anything new is the one towards the larger term.
+  if !force && (← lemmaKind lem).2 then
+    unless ← acLt c.target (← instantiateMVars r.eNew) do
+      throwError "relaxPost: {lemStx} is permutative and this is its normalising \
+        direction, so applying it here would loop; use `relaxPost!` to force it"
+  let mut pending := #[]
+  for mv in r.mvarIds do
+    if ← mv.isAssigned then continue
+    let ty ← instantiateMVars (← mv.getType)
+    if ← isProp ty then
+      pending := pending.push (← mv.replaceTargetDefEq (← deepReduce ty))
+    else
+      pending := pending.push mv
+  let stuck ← dischargeObligations c pending
+  unless stuck.isEmpty do
+    let msgs := stuck.map fun mv => m!"\n{MessageData.ofGoal mv}"
+    throwError "relaxPost: could not discharge the side condition(s) of \
+      {lemStx}:{MessageData.joinSep msgs.toList ""}"
+  let eNew ← deepReduce (← instantiateMVars r.eNew)
+  let eqProof ← instantiateMVars r.eqProof
+  if eNew.hasExprMVar || eqProof.hasExprMVar then
+    throwError "relaxPost: the rewrite left metavariables behind:{indentExpr eNew}"
+  if (c.leafFVars.push c.hpre).any (eNew.containsFVar ·.fvarId!) then
+    throwError "relaxPost: the rewritten postcondition depends on the \
+      precondition:{indentExpr eNew}"
+  let post' ← mkLambdaFVars #[c.inp, c.out] eNew
+  let prf ← withLocalDeclD `hp eNew fun hp => do
+    let bridge := (← mkEqMPR eqProof hp).replaceFVars c.leafFVars (c.leaves.map (·.1))
+    mkLambdaFVars #[c.inp, c.hpre, c.out, hp] bridge
+  finishRelaxPost goal c post' prf
+
+/-! ### Path 2: relaxation by implication
+
+`lem` is not a rewrite rule but an implication `h₁ → … → hₙ → Post inp out`. Unify its
+*conclusion* with the postcondition, discharge from the precondition whichever hypotheses can be,
+and take the ones that survive — necessarily the ones mentioning `out` — as the new
+postcondition. The result is *strictly stronger* than `Post`, which is all `RelaxPostTactic`
+needs, and is the only way to make progress on a specification that does not determine its
+output (see `HarderProblems.lean`: `AppendSpec` admits many outputs, so no `Iff` can turn it into
+`out = …`, but `AppendSpec_cons'` can). -/
+
+/-- Relax the postcondition by applying the implication `lem` backwards: its conclusion becomes
+    the goal's postcondition, its undischarged hypotheses become the new one. -/
+def relaxByImplication (goal : MVarId) (lemStx : Term) (c : RelaxPostCtx) : TacticM Unit := do
+  let lem ← Term.elabTerm lemStx none true
+  let (args, _, concl) ← forallMetaTelescopeReducing (← inferType lem)
+  unless ← isDefEq (← deepReduce concl) c.target do
+    throwError "relaxPost: the conclusion of {lemStx} does not match the \
+      postcondition:{indentExpr c.target}"
+  let full := mkAppN lem args
+  let mut pending := #[]
+  for a in args do
+    let mv := a.mvarId!
+    if ← mv.isAssigned then continue
+    let ty ← instantiateMVars (← mv.getType)
+    if ← isProp ty then pending := pending.push (← mv.replaceTargetDefEq (← deepReduce ty))
+    else pending := pending.push mv
+  let stuck ← dischargeObligations c pending
+  -- Everything the precondition could not settle becomes the new postcondition, so no proof
+  -- obligation is dropped — but a *value* the lemma leaves open is not an obligation, it is an
+  -- under-determined instance, and turning it into a postcondition would smuggle a metavariable
+  -- into the specification.
+  let mut hypTys := #[]
+  for mv in stuck do
+    let ty ← instantiateMVars (← mv.getType)
+    unless ← isProp ty do
+      throwError "relaxPost: {lemStx} leaves the value argument \
+        undetermined:{indentExpr (← mv.getType)}"
+    let ty ← deepReduce ty
+    if (c.leafFVars.push c.hpre).any (ty.containsFVar ·.fvarId!) then
+      throwError "relaxPost: a residual obligation of {lemStx} depends on the \
+        precondition:{indentExpr ty}"
+    hypTys := hypTys.push ty
+  if hypTys.isEmpty then
+    throwError "relaxPost: {lemStx} proves the postcondition for every output, so it leaves \
+      nothing to implement; close the goal with `UseTactic` instead"
+  let post'Body := mkAndN hypTys.toList
+  if post'Body.hasExprMVar then
+    throwError "relaxPost: the residual obligation has metavariables:{indentExpr post'Body}"
+  let post' ← mkLambdaFVars #[c.inp, c.out] post'Body
+  let prf ← withLocalDeclD `hp post'Body fun hp => do
+    let mut comps := #[]
+    let mut cur := hp
+    for i in [0:hypTys.size] do
+      if i + 1 == hypTys.size then comps := comps.push cur
+      else
+        comps := comps.push (← mkAppM ``And.left #[cur])
+        cur ← mkAppM ``And.right #[cur]
+    -- the surviving obligations are still metavariables inside `full`; replace each by the
+    -- matching component of `hp` (cf. the `replaceFVars` for the precondition leaves)
+    let body := (← instantiateMVars full).replace fun e => match e with
+      | .mvar id => (stuck.findIdx? (· == id)).map (comps[·]!)
+      | _ => none
+    let body := body.replaceFVars c.leafFVars (c.leaves.map (·.1))
+    mkLambdaFVars #[c.inp, c.hpre, c.out, hp] body
+  finishRelaxPost goal c post' prf
+
+/-- `relaxPost lem [d₁, …, dₖ]` weakens the postcondition of a goal `Impl I O Pre Post` to a
+`Post'` that implies it *under the precondition*, leaving the single goal `Impl I O Pre Post'`.
+Any hypothesis of `lem` becomes a side condition, proved *from the precondition* by `assumption`,
+`simp_all [d₁, …, dₖ]` and `grind [d₁, …, dₖ]`. No proof obligation is ever silently dropped.
+
+There are two ways `lem` can produce `Post'`, tried in this order:
+
+* **by rewriting.** `lem` is an `Eq`/`Iff`: rewrite `Post` with it. `Post'` is then *equivalent*
+  to `Post`. This is how `SortedOrdered_iff : Ordered l1 → (Sorted l1 l2 ↔ l2 = l1)` turns a
+  specification into the `out = …` shape the code-building combinators need.
+* **by implication.** `lem` is `h₁ → … → hₙ → Post inp out`: unify its conclusion with `Post`,
+  discharge from the precondition whichever `hᵢ` can be, and take the survivors (conjoined) as
+  `Post'`, which is then *strictly stronger* than `Post`. This is the only path available when
+  the specification does not determine its output — `AppendSpec` in `HarderProblems.lean` admits
+  many correct outputs, so no `Iff` can rewrite it to `out = …`, but
+  `AppendSpec_cons' : AppendSpec (a, l1) l2 → l3 = b :: l2 → AppendSpec (a, b :: l1) l3` relaxes
+  `AppendSpec (a, b :: l1) out` to `out = b :: res` in one step, with `l2 := res` recovered from
+  the precondition by `assumption`.
+
+The precondition is made available to that discharger both as-is and split into its conjunctive
+leaves (see `preLeaves`), which is what lets `assumption` instantiate the metavariables a
+rewrite leaves behind: rewriting `Sorted (a :: p :: l) out` with
+`Sorted_Cons : l1.Perm l2 → (Sorted (x :: l1) l3 ↔ Sorted (x :: l2) l3)` yields
+`Sorted (a :: ?l2) out` plus the side condition `(p :: l).Perm ?l2`, and `assumption` picks
+`?l2 := res` out of the precondition.
+
+A *permutative* lemma (one whose two sides differ only by a permutation of subterms, such as
+`Sorted_Swap`) can always be applied again to undo itself, so a search that uses it never
+terminates. `relaxPost` therefore admits such a lemma in one direction only, fixed by the same
+term order `simp` uses for permutative rules — but in the opposite orientation: `simp` rewrites
+towards the smaller term, so the smaller term is the shape a goal already has, and the step that
+can expose something new is the one towards the larger term. `relaxPost! lem` skips the check,
+for steering a derivation by hand in the direction the order forbids. -/
+syntax (name := relaxPostStx) "relaxPost" ppSpace term:max (" [" ident,* "]")? : tactic
+syntax (name := relaxPostForceStx) "relaxPost!" ppSpace term:max (" [" ident,* "]")? : tactic
+
+/-- The implementation of `relaxPost`; `force` disables the permutative-direction check. -/
+def relaxPostCore (force : Bool) (lemStx : Term)
+    (ds : Option (Syntax.TSepArray `ident ",")) : TacticM Unit := withMainContext do
+  let dsArr : Array Ident := match ds with | some ds => ds.getElems | none => #[]
+  let goal ← getMainGoal
+  let tgt ← instantiateMVars (← whnf (← goal.getType))
+  unless tgt.isAppOf ``Impl do
+    throwError "relaxPost: goal is not `Impl I O Pre Post`:{indentExpr tgt}"
+  let #[I, O, Pre, Post] := tgt.getAppArgs
+    | throwError "relaxPost: malformed `Impl` goal:{indentExpr tgt}"
+  withRelaxPostCtx I O Pre Post dsArr fun c => do
+    -- A plain `try`, not `tryCatchRuntimeEx`: an ordinary `catch` re-throws runtime exceptions,
+    -- and a path that ran out of heartbeats should abort rather than send us into a second,
+    -- equally expensive attempt. Only "this lemma does not fit" is worth falling back on.
+    let s ← saveState
+    try
+      relaxByRewrite force goal lemStx c
+    catch rwEx =>
+      let rwMsg ← rwEx.toMessageData.toString
+      s.restore
+      try
+        relaxByImplication goal lemStx c
+      catch impEx =>
+        let impMsg ← impEx.toMessageData.toString
+        s.restore
+        throwError "relaxPost: {lemStx} does not apply here.\n\
+          As a rewrite: {rwMsg}\n\
+          As an implication: {impMsg}"
 
 elab_rules : tactic
   | `(tactic| relaxPost! $lemStx $[[$ds,*]]?) => relaxPostCore true lemStx ds
@@ -893,8 +1049,9 @@ attribute [aesop unsafe 20% (rule_sets := [VericodeL]) tactic] natCases
 `vericode [f, g, …]` hands `f`, `g`, … to aesop in two ways:
 * as **norm-simp** lemmas (as in `simp [f, g]`), to expose problem-specific definitions the
   combinators would not otherwise see through, and
-* as one `relaxPost` **search step each**: at every `Impl` goal aesop may rewrite the
-  postcondition with that lemma, discharging the lemma's own hypotheses from the precondition
+* as one `relaxPost` **search step each**: at every `Impl` goal aesop may relax the
+  postcondition with that lemma — by rewriting with it if it is an `Eq`/`Iff`, otherwise by
+  applying it as an implication — discharging the lemma's own hypotheses from the precondition
   (the whole list is available to the discharger's `simp_all`/`grind`). One rule per lemma, so
   the search backtracks over them like over any other combinator.
 
@@ -903,11 +1060,13 @@ The second form is what conditional lemmas need: a lemma such as
 the precondition is a *different argument* of `Impl` and not in scope there.
 
 Each lemma is routed by shape:
-* not a rewrite rule (a definition to unfold, or a lemma whose conclusion is not `Eq`/`Iff`):
-  norm-simp only — a `relaxPost` rule for it could never fire;
+* a **definition** to unfold: norm-simp only — `relaxPost` has nothing to match it against;
 * a **permutative** rewrite rule (`Sorted_Swap`): `relaxPost` only. As a simp lemma it would
   normalise the postcondition back after every step of the search, undoing exactly the step that
-  exposes the next rewrite. -/
+  exposes the next rewrite;
+* anything else (a plain rewrite rule, or an implication such as `AppendSpec_cons'` whose
+  conclusion is not `Eq`/`Iff`): both. `relaxPost` decides at run time which of its two paths
+  applies. -/
 syntax "vericode" (" [" ident,* "]")? : tactic
 
 elab_rules : tactic
@@ -918,7 +1077,7 @@ elab_rules : tactic
       let c ← realizeGlobalConstNoOverloadWithInfo l
       let isDefn := (← getConstInfo c) matches .defnInfo _
       let (isRw, isPerm) ← lemmaKind (← mkConstWithLevelParams c)
-      if isRw then
+      if !isDefn then
         rules := rules.push (← `(Aesop.rule_expr| unsafe 50% tactic (by relaxPost $l:ident [$ls,*])))
       if isDefn || (isRw && !isPerm) then
         rules := rules.push (← `(Aesop.rule_expr| norm simp $l:ident))

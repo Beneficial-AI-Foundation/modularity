@@ -155,7 +155,8 @@ def InsertionSolution'' : InsertProblem := by
   · vericode [SingletonSorted_iff]
   refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.1) (by vericode) ?_ ?_
   -- `p ≤ a`: `p :: a :: l` is already ordered, so `Sorted (p :: a :: l) out` *is* `out = p :: a :: l`
-  · vericode [SortedOrdered_iff, Ordered]
+  · simp
+    vericode [SortedOrdered_iff, Ordered]
   -- `a < p`: swap, replace `p :: l` by the recursive result `res`, then read off `out = a :: res`
   vericode [Sorted_Swap, Sorted_Cons, SortedOrdered_iff, Ordered_cons_of_perm,
     Ordered_iff_all_ge_head]
@@ -165,8 +166,29 @@ monotonicity obligation, **invents the comparison to branch on**, and rewrites t
 with the lemmas in each branch. The lemmas are the only input; no step of the derivation is
 written by hand. -/
 def InsertionSolution''' : InsertProblem := by
-  vericode [SingletonSorted_iff, SortedOrdered_iff, Sorted_Swap, Sorted_Cons,
+  vericode [SortedOrdered_iff, Sorted_Swap, Sorted_Cons,
     Ordered_cons_of_perm, Ordered_iff_all_ge_head, Ordered]
+
+def InsertionSortSolution''' : InsertionSortProblem := by
+  apply ListRecTactic'
+  · vericode [SortedOrdered_iff]
+
+  refine RelaxPostTactic _ (fun (a, l, res) out => Sorted (a :: res) out) ?_ ?_
+  · refine RelaxPreTactic (fun (a, l, res) => Ordered res) ?_ (fun _ pre => pre.1)
+    refine SplitTactic (.pair .nat (.pair .list .list)) (.pair .nat .list) .list (fun (a, l, res) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
+    · apply PairTactic
+      · apply FstTactic
+        apply IdentityTactic
+      apply SndTactic
+      apply SndTactic
+      apply IdentityTactic
+    refine RelaxPreTactic (fun (a, res) => Ordered res) ?_ ?_
+    · exact InsertionSolution
+    intro (a, res) ⟨s, hs1, hs2⟩
+    have : res = s.2.2 := by grind
+    exact this ▸ hs1
+  intro (a, l, res) pre out
+  exact (SortedPerm_iff _ _ _ (List.Perm.cons _ pre.2.symm)).mp
 
 def InsertionSortSolution : InsertionSortProblem := by
   apply ListRecTactic'
@@ -221,3 +243,7 @@ def InsertionSolution' : InsertProblem := by
     | inr h => exact hal x h
   apply List.Perm.trans (List.Perm.swap _ _ _)
   apply List.Perm.cons _ hpl.2
+
+-- pre1 pre2 pre3 Post
+-- lemma h1 h2 ... => (Post' => Post)
+-- pre1 pre2 pre3 Post'

@@ -95,42 +95,44 @@ def InsertionSolution : InsertProblem := by
     · apply IdentityTactic
     apply NilTactic
 
-  refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.1) ?_ ?_ ?_
+  refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.2.1) ?_ ?_ ?_
   · apply LETactic
     · apply FstTactic
       apply IdentityTactic
     apply FstTactic
     apply SndTactic
+    apply SndTactic
     apply IdentityTactic
   · simp
-    refine UseTactic (fun inp => inp.1 :: inp.2.1 :: inp.2.2.1) ?_ ?_
+    refine UseTactic (fun inp => inp.1 :: inp.2.2.1 :: inp.2.2.2) ?_ ?_
     · apply ConsTactic
       · apply FstTactic
         apply IdentityTactic
       apply ConsTactic
       · apply FstTactic
         apply SndTactic
+        apply SndTactic
         apply IdentityTactic
-      apply FstTactic
+      apply SndTactic
       apply SndTactic
       apply SndTactic
       apply IdentityTactic
     · intro inp pre
       change match inp with
-      | (p, a, l, snd) => Sorted (p :: a :: l) (p :: a :: l)
+      | (p, _res, a, l) => Sorted (p :: a :: l) (p :: a :: l)
       simp [SortedSelf_iff, Ordered] --grind here
       exact ⟨pre.2, pre.1.1⟩
   simp
-  refine UseTactic (fun inp => inp.2.1 :: inp.2.2.2) ?_ ?_
+  refine UseTactic (fun inp => inp.2.2.1 :: inp.2.1) ?_ ?_
   · apply ConsTactic
     · apply FstTactic
       apply SndTactic
+      apply SndTactic
       apply IdentityTactic
-    apply SndTactic
-    apply SndTactic
+    apply FstTactic
     apply SndTactic
     apply IdentityTactic
-  intro (p, a, l, res) pre
+  intro (p, res, a, l) pre
   simp_all [Sorted, Ordered_iff_all_ge_head]
   obtain ⟨⟨⟨hal, hl⟩, hpl⟩, hap⟩ := pre
   constructor
@@ -153,7 +155,7 @@ def InsertionSolution'' : InsertProblem := by
     | nil => simp [Ordered]
     | cons a l _ => simp [Ordered]
   · vericode [SingletonSorted_iff]
-  refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.1) (by vericode) ?_ ?_
+  refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.2.1) (by vericode) ?_ ?_
   -- `p ≤ a`: `p :: a :: l` is already ordered, so `Sorted (p :: a :: l) out` *is* `out = p :: a :: l`
   · simp
     vericode [SortedOrdered_iff, Ordered]
@@ -173,20 +175,20 @@ def InsertionSortSolution''' : InsertionSortProblem := by
   apply ListRecTactic'
   · vericode [SortedOrdered_iff]
 
-  refine RelaxPostTactic _ (fun (a, l, res) out => Sorted (a :: res) out) ?_ ?_
-  · refine RelaxPreTactic (fun (a, l, res) => Ordered res) ?_ (fun _ pre => pre.1)
-    refine SplitTactic (.pair .nat (.pair .list .list)) (.pair .nat .list) .list (fun (a, l, res) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
+  refine RelaxPostTactic _ (fun (res, a, l) out => Sorted (a :: res) out) ?_ ?_
+  · refine RelaxPreTactic (fun (res, a, l) => Ordered res) (fun _ pre => pre.1) ?_
+    refine SplitTactic (.pair .list (.pair .nat .list)) (.pair .nat .list) .list (fun (res, a, l) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
     · apply PairTactic
       · apply FstTactic
+        apply SndTactic
         apply IdentityTactic
-      apply SndTactic
-      apply SndTactic
+      apply FstTactic
       apply IdentityTactic
     refine RelaxPreTactic (fun (a, res) => Ordered res) ?_ ?_
-    · exact InsertionSolution
-    intro (a, res) ⟨s, hs1, hs2⟩
-    have : res = s.2.2 := by grind
-    exact this ▸ hs1
+    · intro (a, res) ⟨s, hs1, hs2⟩
+      have : res = s.1 := by grind
+      exact this ▸ hs1
+    exact InsertionSolution
   intro (a, l, res) pre out
   exact (SortedPerm_iff _ _ _ (List.Perm.cons _ pre.2.symm)).mp
 
@@ -195,20 +197,20 @@ def InsertionSortSolution : InsertionSortProblem := by
   · refine UseTactic (fun inp => []) ?_ ?_
     · apply NilTactic
     simp [Sorted, Ordered]
-  refine RelaxPostTactic _ (fun (a, l, res) out => Sorted (a :: res) out) ?_ ?_
-  · refine RelaxPreTactic (fun (a, l, res) => Ordered res) ?_ (fun _ pre => pre.1)
-    refine SplitTactic (.pair .nat (.pair .list .list)) (.pair .nat .list) .list (fun (a, l, res) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
+  refine RelaxPostTactic _ (fun (res, a, l) out => Sorted (a :: res) out) ?_ ?_
+  · refine RelaxPreTactic (fun (res, a, l) => Ordered res) (fun _ pre => pre.1) ?_
+    refine SplitTactic (.pair .list (.pair .nat .list)) (.pair .nat .list) .list (fun (res, a, l) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
     · apply PairTactic
       · apply FstTactic
+        apply SndTactic
         apply IdentityTactic
-      apply SndTactic
-      apply SndTactic
+      apply FstTactic
       apply IdentityTactic
     refine RelaxPreTactic (fun (a, res) => Ordered res) ?_ ?_
-    · exact InsertionSolution
-    intro (a, res) ⟨s, hs1, hs2⟩
-    have : res = s.2.2 := by grind
-    exact this ▸ hs1
+    · intro (a, res) ⟨s, hs1, hs2⟩
+      have : res = s.1 := by grind
+      exact this ▸ hs1
+    exact InsertionSolution
   intro (a, l, res) pre out
   exact (SortedPerm_iff _ _ _ (List.Perm.cons _ pre.2.symm)).mp
 
@@ -221,17 +223,17 @@ def InsertionSolution' : InsertProblem := by
     | nil => simp [Ordered]
     | cons a l _ => simp [Ordered]
   · vericode [SingletonSorted_iff]
-  refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.1) (by vericode) ?_ ?_
+  refine CasesTactic (fun inp => Nat.ble inp.1 inp.2.2.1) (by vericode) ?_ ?_
   · simp
-    refine UseTactic (fun inp => inp.1 :: inp.2.1 :: inp.2.2.1) (by vericode) ?_
+    refine UseTactic (fun inp => inp.1 :: inp.2.2.1 :: inp.2.2.2) (by vericode) ?_
     intro inp pre
     change match inp with
-    | (p, a, l, snd) => Sorted (p :: a :: l) (p :: a :: l)
+    | (p, _res, a, l) => Sorted (p :: a :: l) (p :: a :: l)
     simp [SortedSelf_iff, Ordered] --grind here
     exact ⟨pre.2, pre.1.1⟩
   simp
-  refine UseTactic (fun inp => inp.2.1 :: inp.2.2.2) (by vericode) ?_
-  intro (p, a, l, res) pre
+  refine UseTactic (fun inp => inp.2.2.1 :: inp.2.1) (by vericode) ?_
+  intro (p, res, a, l) pre
   simp_all [Sorted, Ordered_iff_all_ge_head]
   obtain ⟨⟨⟨hal, hl⟩, hpl⟩, hap⟩ := pre
   constructor

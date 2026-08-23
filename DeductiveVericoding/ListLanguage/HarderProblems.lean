@@ -198,17 +198,17 @@ def MergeSolution : MergeProblem := by
     exact ⟨h1, by cases l <;> simp_all [Ordered]⟩
   · vericode [MergeSpec_nil]
   -- the merged tail `res` is already sorted, so merging `a` in is exactly an insertion
-  refine RelaxPostTactic _ (fun (_l1, a, _l2, res) out => Sorted (a :: res) out) ?_ ?_
-  · refine RelaxPreTactic (fun (_l1, _a, _l2, res) => Ordered res) ?_ (fun _ pre => pre.2.1)
-    refine SplitTactic (.pair .list (.pair .nat (.pair .list .list))) (.pair .nat .list) .list
-      (fun (_l1, a, _l2, res) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
+  refine RelaxPostTactic _ (fun (_l1, res, a, _l2) out => Sorted (a :: res) out) ?_ ?_
+  · refine RelaxPreTactic (fun (_l1, res, _a, _l2) => Ordered res) (fun _ pre => pre.2.1) ?_
+    refine SplitTactic (.pair .list (.pair .list (.pair .nat .list))) (.pair .nat .list) .list
+      (fun (_l1, res, a, _l2) => (a, res)) (fun (a, res) out => Sorted (a :: res) out) ?_ ?_
     · vericode
     refine RelaxPreTactic (fun (_a, res) => Ordered res) ?_ ?_
-    · exact InsertionSolution
-    intro (a, res) ⟨s, hs1, _⟩
-    have : res = s.2.2.2 := by grind
-    exact this ▸ hs1
-  rintro ⟨l1, a, l2, res⟩ ⟨-, -, hperm⟩ out ⟨ho, hp⟩
+    · intro (a, res) ⟨s, hs1, _⟩
+      have : res = s.2.1 := by grind
+      exact this ▸ hs1
+    exact InsertionSolution
+  rintro ⟨l1, res, a, l2⟩ ⟨-, -, hperm⟩ out ⟨ho, hp⟩
   exact ⟨ho, (List.perm_middle.trans (hperm.cons a)).trans hp⟩
 
 #eval ListLanguage.Trm.pretty MergeSolution.code
@@ -222,17 +222,16 @@ for a specific missing piece, recorded here rather than left as a failing build.
 ```
 abbrev BoundProblem := Impl .list .nat (fun _ => True) (fun l out => ∀ x ∈ l, x ≤ out)
 ```
-Blocked twice over. `Trm'.listRec` returns `.list`, so there is no `list → nat` fold; and the
-`.head` primitive that could pull a `nat` out of a folded singleton has no combinator. Unblocking
-it needs a `HeadTactic`/`TailTactic` pair — a two-line mirror of `FstTactic` — and a `listRec`
-that can return types other than `.list`.
+The `list → nat` fold now exists — `Trm'.listRec` returns an arbitrary `Tpe`, so `ListRecTactic`
+can build it. What is still missing is the specification side: the postcondition is ambiguous
+(any large enough `out` will do), so no rule can turn it into an `out = …` goal to build code for.
 
 **2. Partition around a pivot.** A pair-valued output on a *coupled* relational specification:
 ```
 def PartSpec : Nat × List Nat → List Nat × List Nat → Prop := fun (a, l) out =>
   (out.1 ++ out.2).Perm l ∧ (∀ x ∈ out.1, x ≤ a) ∧ (∀ x ∈ out.2, ¬ x ≤ a)
 ```
-`listRec` cannot produce a pair, and `PairTactic` needs a *functional* `out = (t1 inp, t2 inp)`,
+`listRec` can produce a pair now, but `PairTactic` needs a *functional* `out = (t1 inp, t2 inp)`,
 so a relational pair postcondition cannot be split into two goals. That would need a `PairTactic'`
 taking `Post1` and `Post2` separately — and even then the `Perm` clause couples the two
 components, so the specification would have to be restated in a decoupled form first.

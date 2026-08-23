@@ -34,3 +34,5 @@ which nothing could unfold.) -/
 def MaxSpec (out x y : Nat) : Prop := out = if x ≤ y then y else x
 
 abbrev MaxProblem := Impl (.pair .nat .nat) .nat (fun _ => True) (fun p out => MaxSpec out p.1 p.2)
+
+abbrev IsEmptyProblem := Impl .list .bool (fun _ => True) (fun inp out => out = inp.isEmpty)
